@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  base: '/radar-room-configurator/',
   server: {
     port: 5173,
     // Proxy /api/* to the FastAPI backend so CORS is never an issue in prod.
