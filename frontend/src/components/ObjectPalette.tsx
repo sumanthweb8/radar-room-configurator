@@ -15,6 +15,7 @@ function RoomSizeField({ label, value, onChange, dark, inputBg, border, textSm }
 }) {
   const [raw, setRaw] = useState(String(value));
   const focused = useRef(false);
+  const inputId = `room-size-${label.toLowerCase()}`;
 
   // Sync display when parent changes value externally (e.g. after import)
   useEffect(() => {
@@ -33,9 +34,10 @@ function RoomSizeField({ label, value, onChange, dark, inputBg, border, textSm }
 
   return (
     <div style={{ flex: 1 }}>
-      <label style={{ display: 'block', fontSize: 10, color: textSm, marginBottom: 4 }}>{label}</label>
+      <label htmlFor={inputId} style={{ display: 'block', fontSize: 10, color: textSm, marginBottom: 4 }}>{label}</label>
       <div style={{ display: 'flex', alignItems: 'center', background: inputBg, border: `1px solid ${border}`, borderRadius: 8, padding: '5px 10px', gap: 4 }}>
         <input
+          id={inputId}
           data-rsf={label}
           type="number"
           step="0.1"
