@@ -11,6 +11,7 @@ function makeObject(overrides: Partial<RoomObject> = {}): RoomObject {
     id: 'abc', type: 'bed', label: 'Bed',
     x: 1, y: 1, width: 1.4, height: 2.0,
     color: '#4299e1', rotation: 0,
+    marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
     ...overrides,
   };
 }

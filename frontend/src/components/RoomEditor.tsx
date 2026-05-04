@@ -10,6 +10,7 @@ interface Props {
   onUpdate: (id: string, patch: Partial<RoomObject>) => void;
   dark: boolean;
   adjacentRooms?: AdjacentRoom[];
+  radarObj?: RoomObject | null;
 }
 
 const SNAP = 0.05;
@@ -199,7 +200,7 @@ function ObjectShape({ obj, scale }: { obj: RoomObject; scale: number }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelect, onUpdate, dark, adjacentRooms = [] }) => {
+export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelect, onUpdate, dark, adjacentRooms = [], radarObj = null }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(100);
 
@@ -467,15 +468,39 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
         {/* ── Walls (thick border) ── */}
         <rect x={RX} y={RY} width={W} height={H} fill="none" stroke={wallColor} strokeWidth={3} />
 
-        {/* ── Corner coords ── */}
-        {[
-          { t: '0,0',               x: RX + 4,     y: RY + 10 },
-          { t: `${room.width},0`,   x: RX + W - 4, y: RY + 10, anchor: 'end' },
-          { t: `0,${room.height}`,  x: RX + 4,     y: RY + H - 4 },
-          { t: `${room.width},${room.height}`, x: RX + W - 4, y: RY + H - 4, anchor: 'end' },
-        ].map(({ t, x, y, anchor }) => (
-          <text key={t} x={x} y={y} fontSize={8} fill={dark ? '#1e3a5f' : '#cbd5e1'} fontFamily="monospace" textAnchor={(anchor as 'end') || 'start'}>{t}</text>
-        ))}
+        {/* ── Corner coords (radar-relative if radar placed, else room-relative) ── */}
+        {(() => {
+          const rx0 = radarObj ? -(radarObj.x + radarObj.width  / 2) : 0;
+          const ry0 = radarObj ? -(radarObj.y + radarObj.height / 2) : 0;
+          const fmt = (v: number) => v % 1 === 0 ? String(v) : v.toFixed(2);
+          return [
+            { t: `${fmt(rx0)},${fmt(ry0)}`,                         x: RX + 4,     y: RY + 10 },
+            { t: `${fmt(rx0 + room.width)},${fmt(ry0)}`,            x: RX + W - 4, y: RY + 10,    anchor: 'end' },
+            { t: `${fmt(rx0)},${fmt(ry0 + room.height)}`,           x: RX + 4,     y: RY + H - 4 },
+            { t: `${fmt(rx0 + room.width)},${fmt(ry0 + room.height)}`, x: RX + W - 4, y: RY + H - 4, anchor: 'end' },
+          ].map(({ t, x, y, anchor }) => (
+            <text key={t} x={x} y={y} fontSize={8} fill={dark ? '#1e3a5f' : '#cbd5e1'} fontFamily="monospace" textAnchor={(anchor as 'end') || 'start'}>{t}</text>
+          ));
+        })()}
+
+        {/* ── Radar crosshair ── */}
+        {radarObj && (() => {
+          const rcx = RX + (radarObj.x + radarObj.width  / 2) * scale;
+          const rcy = RY + (radarObj.y + radarObj.height / 2) * scale;
+          return (
+            <g style={{ pointerEvents: 'none' }}>
+              {/* Full-room axis lines */}
+              <line x1={RX} y1={rcy} x2={RX + W} y2={rcy} stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 4" opacity={0.55} />
+              <line x1={rcx} y1={RY} x2={rcx} y2={RY + H} stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 4" opacity={0.55} />
+              {/* Origin dot */}
+              <circle cx={rcx} cy={rcy} r={5} fill="#7c3aed" opacity={0.85} />
+              <circle cx={rcx} cy={rcy} r={2.5} fill="#fff" />
+              {/* Label */}
+              <rect x={rcx + 8} y={rcy - 11} width={34} height={13} rx={3} fill="#7c3aed" opacity={0.85} />
+              <text x={rcx + 25} y={rcy - 2} textAnchor="middle" fontSize={8} fill="white" fontFamily="monospace" fontWeight={700}>0, 0</text>
+            </g>
+          );
+        })()}
 
         {/* ── Objects ── */}
         {objects.map(obj => {
@@ -487,6 +512,12 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
           const cx   = ox + ow / 2;
           const cy   = oy + oh / 2;
           const labelFs = Math.max(8, Math.min(11, Math.min(ow, oh) / 8));
+
+          // Radar-relative centre coords for this object
+          const radarOriginX = radarObj ? radarObj.x + radarObj.width  / 2 : 0;
+          const radarOriginY = radarObj ? radarObj.y + radarObj.height / 2 : 0;
+          const relX = +(obj.x + obj.width  / 2 - radarOriginX).toFixed(2);
+          const relY = +(obj.y + obj.height / 2 - radarOriginY).toFixed(2);
 
           return (
             <g key={obj.id}
@@ -531,6 +562,16 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
                 <g style={{ pointerEvents: 'none' }}>
                   <rect x={cx - 14} y={oy - 18} width={28} height={14} rx={7} fill={obj.color} />
                   <text x={cx} y={oy - 7} textAnchor="middle" fontSize={8} fill="white" fontFamily="monospace">{obj.rotation}°</text>
+                </g>
+              )}
+
+              {/* Radar-relative coord badge — shown on all non-radar objects when radar exists */}
+              {radarObj && obj.type !== 'radar' && sel && (
+                <g style={{ pointerEvents: 'none' }}>
+                  <rect x={cx - 30} y={oy + oh + 3} width={60} height={13} rx={3} fill="#7c3aed" opacity={0.88} />
+                  <text x={cx} y={oy + oh + 12} textAnchor="middle" fontSize={8} fill="white" fontFamily="monospace">
+                    {relX},{relY} m
+                  </text>
                 </g>
               )}
             </g>

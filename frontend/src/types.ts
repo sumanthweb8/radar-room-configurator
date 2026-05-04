@@ -13,6 +13,10 @@ export interface RoomObject {
   height: number;  // metres
   color: string;
   rotation: number; // degrees
+  marginTop:    number; // metres — buffer above object for radar algorithms
+  marginBottom: number;
+  marginLeft:   number;
+  marginRight:  number;
 }
 
 export interface RoomConfig {

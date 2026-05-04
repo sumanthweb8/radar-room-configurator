@@ -36,41 +36,37 @@ const ALL_FEATURES = [
 /**
  * Build the exact config.json format used by the radar algorithms.
  *
- * Coordinate system:
- *   The radar is assumed to be at the room origin (0,0) top-left.
- *   top_left/top_right/bottom_left/bottom_right are in metres.
- *   In the config format: top = smaller Y (further from viewer), bottom = larger Y.
- *   x positive = right, y positive = up (away from viewer).
+ * Coordinate system (matches firmware convention):
+ *   Origin = radar sensor centre (0, 0).
+ *   x positive = right, y positive = UP (away from viewer / toward back wall).
+ *   Canvas y is flipped: config_y = radarOriginY_canvas - canvas_y
  *
- *   Room canvas: x=0 left, y=0 top.
- *   Config coords: same — x from left, y from top (matching existing configs).
+ *   top_left / top_right → higher y value (further from viewer)
+ *   bottom_left / bottom_right → lower y value (closer to viewer)
  */
 function buildConfig(objects: RoomObject[], board: string, location: string) {
+  const radar   = objects.find(o => o.type === 'radar');
+  const originX = radar ? radar.x + radar.width  / 2 : 0;
+  const originY = radar ? radar.y + radar.height / 2 : 0;
+
   const serialized = objects.map(obj => {
-    const x1 = +obj.x.toFixed(3);
-    const y1 = +obj.y.toFixed(3);
-    const x2 = +(obj.x + obj.width).toFixed(3);
-    const y2 = +(obj.y + obj.height).toFixed(3);
+    // x: left→right same direction. y: FLIPPED (canvas down = config negative)
+    const left   = +(obj.x            - originX).toFixed(3);
+    const right  = +(obj.x + obj.width - originX).toFixed(3);
+    const top    = +(originY - obj.y           ).toFixed(3); // canvas top → large +y
+    const bottom = +(originY - (obj.y + obj.height)).toFixed(3); // canvas bottom → small y
 
     const base: Record<string, unknown> = {
       name:         obj.label.toLowerCase().replace(/\s+/g, '_'),
-      top_left:     [x1, y1],
-      top_right:    [x2, y1],
-      bottom_left:  [x1, y2],
-      bottom_right: [x2, y2],
-      margin_top:    0,
-      margin_bottom: 0,
-      margin_left:   0,
-      margin_right:  0,
+      top_left:     [left,  top],
+      top_right:    [right, top],
+      bottom_left:  [left,  bottom],
+      bottom_right: [right, bottom],
+      margin_top:    obj.marginTop    ?? 0,
+      margin_bottom: obj.marginBottom ?? 0,
+      margin_left:   obj.marginLeft   ?? 0,
+      margin_right:  obj.marginRight  ?? 0,
     };
-
-    // bed gets extra dimension hints
-    if (obj.type === 'bed') {
-      base.top_height    = 0.5;
-      base.bottom_height = 0.5;
-      base.right_width   = 0.5;
-      base.left_width    = 0.5;
-    }
 
     return base;
   });
@@ -108,6 +104,7 @@ export default function App() {
   }
 
   const selectedObject = objects.find(o => o.id === selectedId) ?? null;
+  const radarObj       = objects.find(o => o.type === 'radar') ?? null;
 
   function handleAdd(type: ObjectType) {
     const p = OBJECT_PRESETS[type];
@@ -117,6 +114,7 @@ export default function App() {
       y: Math.max(0, (room.height - p.defaultHeight) / 2),
       width: p.defaultWidth, height: p.defaultHeight,
       color: p.color, rotation: 0,
+      marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
     };
     setObjects(prev => [...prev, obj]);
     setSelectedId(obj.id);
@@ -147,6 +145,10 @@ export default function App() {
         height: +(o.height ?? preset.defaultHeight),
         color: preset.color,
         rotation: o.rotation ?? 0,
+        marginTop:    +(o.marginTop    ?? 0),
+        marginBottom: +(o.marginBottom ?? 0),
+        marginLeft:   +(o.marginLeft   ?? 0),
+        marginRight:  +(o.marginRight  ?? 0),
       };
     });
     setObjects(imported);
@@ -243,7 +245,7 @@ export default function App() {
           <RoomEditor
             room={room} objects={objects} selectedId={selectedId}
             onSelect={setSelectedId} onUpdate={handleUpdate} dark={dark}
-            adjacentRooms={adjacentRooms}
+            adjacentRooms={adjacentRooms} radarObj={radarObj}
           />
         </main>
         <PropertiesPanel
@@ -255,6 +257,7 @@ export default function App() {
           onAddAdjacentRoom={handleAddAdjacentRoom}
           onUpdateAdjacentRoom={handleUpdateAdjacentRoom}
           onRemoveAdjacentRoom={handleRemoveAdjacentRoom}
+          radarObj={radarObj}
         />
       </div>
 

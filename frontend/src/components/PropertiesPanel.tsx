@@ -13,6 +13,7 @@ interface Props {
   onAddAdjacentRoom: (doorId: string, wall: WallSide, width: number, height: number, roomType: AdjacentRoomType) => void;
   onUpdateAdjacentRoom: (id: string, patch: Partial<AdjacentRoom>) => void;
   onRemoveAdjacentRoom: (id: string) => void;
+  radarObj?: RoomObject | null;
 }
 
 // ── Standalone sub-components (MUST be outside the panel to avoid remounting) ──
@@ -66,6 +67,7 @@ const Section: React.FC<{ title: string; textSm: string; children: React.ReactNo
 export const PropertiesPanel: React.FC<Props> = ({
   object, room, onUpdate, onDelete, onDeselect, dark,
   adjacentRooms, onAddAdjacentRoom, onUpdateAdjacentRoom, onRemoveAdjacentRoom,
+  radarObj = null,
 }) => {
   const bg          = dark ? '#0d1117'                : '#ffffff';
   const border      = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
@@ -132,11 +134,34 @@ export const PropertiesPanel: React.FC<Props> = ({
       {/* Scrollable body */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 14px' }}>
 
-        <Section title="Position (m)" textSm={textSm}>
+        <Section title={radarObj && obj.type !== 'radar' ? 'Position — radar-relative (m)' : 'Position (m)'} textSm={textSm}>
+          {(() => {
+            const rox = radarObj && obj.type !== 'radar' ? radarObj.x + radarObj.width  / 2 : 0;
+            const roy = radarObj && obj.type !== 'radar' ? radarObj.y + radarObj.height / 2 : 0;
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <Field label="X →" value={+(obj.x - rox).toFixed(3)} step={0.05}
+                  onChange={v => clampField('x')(v + rox)} {...fieldProps} />
+                <Field label="Y ↓" value={+(obj.y - roy).toFixed(3)} step={0.05}
+                  onChange={v => clampField('y')(v + roy)} {...fieldProps} />
+              </div>
+            );
+          })()}
+          {radarObj && obj.type !== 'radar' && (
+            <p style={{ fontSize: 9, color: textSm, marginTop: 4, fontFamily: 'monospace' }}>
+              📡 origin = radar centre
+            </p>
+          )}
+        </Section>
+
+        <Section title="Margins (m)" textSm={textSm}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <Field label="X →" value={+obj.x.toFixed(3)} step={0.05} onChange={clampField('x')} {...fieldProps} />
-            <Field label="Y ↓" value={+obj.y.toFixed(3)} step={0.05} onChange={clampField('y')} {...fieldProps} />
+            <Field label="Top"    value={obj.marginTop    ?? 0} step={0.05} min={0} onChange={v => onUpdate({ marginTop:    v })} {...fieldProps} />
+            <Field label="Bottom" value={obj.marginBottom ?? 0} step={0.05} min={0} onChange={v => onUpdate({ marginBottom: v })} {...fieldProps} />
+            <Field label="Left"   value={obj.marginLeft   ?? 0} step={0.05} min={0} onChange={v => onUpdate({ marginLeft:   v })} {...fieldProps} />
+            <Field label="Right"  value={obj.marginRight  ?? 0} step={0.05} min={0} onChange={v => onUpdate({ marginRight:  v })} {...fieldProps} />
           </div>
+          <p style={{ fontSize: 9, color: textSm, marginTop: 4 }}>Extra buffer zone around object for radar detection</p>
         </Section>
 
         <Section title="Size (m)" textSm={textSm}>

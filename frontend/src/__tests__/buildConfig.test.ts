@@ -36,7 +36,7 @@ function buildConfig(objects: RoomObject[], board: string, location: string) {
 }
 
 function obj(overrides: Partial<RoomObject> = {}): RoomObject {
-  return { id:'1', type:'bed', label:'Bed', x:0, y:0, width:1.4, height:2, color:'#fff', rotation:0, ...overrides };
+  return { id:'1', type:'bed', label:'Bed', x:0, y:0, width:1.4, height:2, color:'#fff', rotation:0, marginTop:0, marginBottom:0, marginLeft:0, marginRight:0, ...overrides };
 }
 
 describe('buildConfig', () => {

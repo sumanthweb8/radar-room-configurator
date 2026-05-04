@@ -9,6 +9,7 @@ function makeObj(overrides: Partial<RoomObject> = {}): RoomObject {
     id: 'x', type: 'door', label: 'Door',
     x: 0, y: 1.5, width: 0.9, height: 0.15,
     color: '#fff', rotation: 0,
+    marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
     ...overrides,
   };
 }
