@@ -32,18 +32,19 @@ export const ExportModal: React.FC<Props> = ({ onConfirm, onCancel, dark }) => {
 
         {/* Fields */}
         {[
-          { label: 'Board ID', value: board, set: setBoard, placeholder: 'e.g. kc2505p004' },
-          { label: 'Location', value: location, set: setLocation, placeholder: 'e.g. room1' },
-        ].map(({ label, value, set, placeholder }) => (
+          { label: 'Board ID', value: board, set: setBoard, placeholder: 'e.g. kc2505p004', type: 'text' },
+          { label: 'Location', value: location, set: setLocation, placeholder: 'e.g. room1', type: 'text' },
+        ].map(({ label, value, set, placeholder, type }) => (
           <div key={label} style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 500, color: textSm, marginBottom: 5 }}>{label}</label>
             <input
-              type="text" value={value} placeholder={placeholder}
+              type={type} value={value} placeholder={placeholder}
               onChange={e => set(e.target.value)}
               style={{ width: '100%', background: inputBg, border: `1px solid ${inputBorder}`, borderRadius: 8, padding: '8px 12px', fontSize: 13, color: textMd, outline: 'none', fontFamily: 'monospace', boxSizing: 'border-box' }}
             />
           </div>
         ))}
+
 
         {/* Preview */}
         {(board || location) && (
