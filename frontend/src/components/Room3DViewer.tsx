@@ -227,9 +227,15 @@ function makeWardrobe(w: number, d: number): THREE.Group {
 
 function makeRadar(w: number): THREE.Group {
   const g = new THREE.Group();
-  addTo(g, box(w, 0.015, w, 0x1a1a2e, 0.3, 0.7), 0, 0.008, w / 2);
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(w * 0.22, 10, 10), new THREE.MeshStandardMaterial({ color: 0x9b59b6, emissive: 0x9b59b6, emissiveIntensity: 0.9 }));
-  addTo(g, dot, 0, 0.02, w / 2);
+  // Body — flat box, faces downward from ceiling mount
+  addTo(g, box(w * 3, 0.025, w * 3, 0x1a1a2e, 0.3, 0.8), 0, 0, 0);
+  // Lens dome (purple glow)
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(w * 0.6, 12, 12), new THREE.MeshStandardMaterial({ color: 0x9b59b6, emissive: 0x9b59b6, emissiveIntensity: 1.2, roughness: 0.2, metalness: 0.5 }));
+  addTo(g, dome, 0, -0.02, 0);
+  // Status LED ring
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(w * 0.9, 0.01, 6, 24), new THREE.MeshStandardMaterial({ color: 0x00ff88, emissive: 0x00ff88, emissiveIntensity: 2.0 }));
+  ring.rotation.x = Math.PI / 2;
+  addTo(g, ring, 0, -0.005, 0);
   return g;
 }
 
@@ -425,6 +431,55 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
         group.position.set(nearest.pos[0], nearest.pos[1], nearest.pos[2]);
         group.rotation.y = nearest.ry;
         scene.add(group);
+      } else if (obj.type === 'radar') {
+        // Radar mounted at 2.4 m height (ceiling level), pointing downward
+        const RADAR_HEIGHT = 2.4;
+        const rcx = obj.x + w / 2;
+        const rcz = obj.y + d / 2;
+        group.position.set(rcx, RADAR_HEIGHT, rcz);
+        scene.add(group);
+
+        // Detection cone — widens from sensor down to floor
+        const coneR = Math.max(room.width, room.height) * 0.55;
+        const coneMat = new THREE.MeshStandardMaterial({
+          color: 0x9b59b6, transparent: true, opacity: 0.055,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(coneR, RADAR_HEIGHT, 48, 1, true), coneMat);
+        cone.position.set(rcx, RADAR_HEIGHT / 2, rcz);
+        scene.add(cone);
+
+        // Rings on floor showing coverage
+        [0.35, 0.65, 1.0].forEach(frac => {
+          const r = coneR * frac;
+          const ringMat = new THREE.MeshBasicMaterial({ color: 0x9b59b6, transparent: true, opacity: 0.18 - frac * 0.1 });
+          const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(r, 0.012, 6, 64), ringMat);
+          ringMesh.rotation.x = Math.PI / 2;
+          ringMesh.position.set(rcx, 0.005, rcz);
+          scene.add(ringMesh);
+        });
+
+        // Vertical drop-line from sensor to floor
+        const lineMat = new THREE.MeshBasicMaterial({ color: 0xcc88ff, transparent: true, opacity: 0.4 });
+        const lineMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, RADAR_HEIGHT, 8), lineMat);
+        lineMesh.position.set(rcx, RADAR_HEIGHT / 2, rcz);
+        scene.add(lineMesh);
+
+        // Height label
+        const hc = document.createElement('canvas');
+        hc.width = 200; hc.height = 42;
+        const hx2 = hc.getContext('2d')!;
+        hx2.fillStyle = 'rgba(155,89,182,0.85)';
+        hx2.roundRect(2, 2, 196, 38, 7); hx2.fill();
+        hx2.fillStyle = '#fff';
+        hx2.font = 'bold 16px system-ui';
+        hx2.textAlign = 'center'; hx2.textBaseline = 'middle';
+        hx2.fillText('📡 2.4 m', 100, 21);
+        const heightSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(hc), transparent: true, depthTest: false }));
+        heightSprite.scale.set(0.9, 0.22, 1);
+        heightSprite.position.set(rcx + 0.55, RADAR_HEIGHT + 0.18, rcz);
+        scene.add(heightSprite);
+
       } else {
         // Place all furniture: geometry is centered in X, z spans 0→d
         // Wrap so pivot = object footprint center
@@ -438,7 +493,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
       }
 
       // Floating label
-      if (obj.type !== 'door' && obj.type !== 'window') {
+      if (obj.type !== 'door' && obj.type !== 'window' && obj.type !== 'radar') {
         const lc = document.createElement('canvas');
         lc.width = 256; lc.height = 52;
         const lx = lc.getContext('2d')!;
