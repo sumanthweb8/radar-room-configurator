@@ -278,10 +278,6 @@ export default function App() {
               {tab.label} · {objects.length} objects · {room.width} × {room.height} m
             </p>
           </div>
-          {/* Project badge */}
-          <div style={{ marginLeft: 6, padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: dark ? 'rgba(200,80,107,0.1)' : 'rgba(200,80,107,0.08)', color: '#c8506b', border: '1px solid rgba(200,80,107,0.25)' }}>
-            Utsav 505 BM
-          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

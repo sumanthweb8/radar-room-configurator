@@ -31,7 +31,7 @@ export interface FloorPlanRoom {
 export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
   {
     id: 'room_002',
-    label: 'Room 002',
+    label: 'Sample 1',
     area: '8.57 m²',
     config: { name: 'Room 002', width: 2.91, height: 2.95 },
     objects: [
@@ -48,7 +48,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
   },
   {
     id: 'space_003',
-    label: 'Space 003',
+    label: 'Sample 2',
     area: '17.11 m²',
     config: { name: 'Space 003', width: 5.41, height: 3.16 },
     objects: [
@@ -63,38 +63,6 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
       o('s3_d2',  'door',    'Door (top-L)',   1.80, 0.00, 1.63, 0.10),
       o('s3_d3',  'door',    'Door (top-R)',   3.65, 0.00, 0.92, 0.10),
       o('s3_win', 'window',  'Window',         5.31, 1.22, 0.10, 1.14),
-    ],
-  },
-  {
-    id: 'room_001',
-    label: 'Room 001',
-    area: '12.45 m²',
-    config: { name: 'Room 001', width: 5.31, height: 2.34 },
-    objects: [
-      o('r1_radar','radar',  'Radar',           0.12, 2.15, 0.08, 0.08),
-      o('r1_stv', 'custom',  'Stove',          3.20, 1.78, 0.82, 0.46),
-      o('r1_sg',  'cabinet', 'Storage',        4.07, 1.81, 1.14, 0.51),
-      o('r1_w1',  'window',  'Window (top)',   4.30, 0.00, 1.01, 0.10),
-      o('r1_w2',  'window',  'Window (side)',  5.21, 0.10, 0.10, 0.93),
-      o('r1_d1',  'door',    'Opening',        0.89, 0.00, 0.10, 0.98),
-      o('r1_d2',  'door',    'Door (btm-L)',   1.70, 2.24, 1.63, 0.10),
-      o('r1_d3',  'door',    'Door (btm-R)',   3.39, 2.24, 0.92, 0.10),
-    ],
-  },
-  {
-    id: 'room_004',
-    label: 'Room 004',
-    area: '12.04 m²',
-    config: { name: 'Room 004', width: 3.96, height: 3.04 },
-    objects: [
-      o('r4_radar','radar',  'Radar',           1.52, 2.82, 0.08, 0.08),
-      o('r4_wr',  'wardrobe','Storage',        0.05, 0.10, 0.40, 1.35),
-      o('r4_bed', 'bed',     'Bed',            0.84, 0.85, 1.67, 1.95),
-      o('r4_tbl', 'table',   'Table',          2.72, 0.15, 0.82, 0.51),
-      o('r4_ch',  'chair',   'Chair',          2.75, 0.80, 0.56, 0.52, 45),
-      o('r4_sg',  'cabinet', 'Storage',        0.84, 2.50, 0.45, 0.44),
-      o('r4_d1',  'door',    'Door',           2.91, 2.94, 0.77, 0.10),
-      o('r4_d2',  'door',    'Opening',        3.86, 2.22, 0.10, 0.60),
     ],
   },
 ];
