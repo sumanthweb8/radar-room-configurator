@@ -258,22 +258,28 @@ export default function App() {
       style={{ background: dark ? '#0d1117' : '#f8fafc', color: dark ? '#e2e8f0' : '#0f172a' }}
     >
       {/* Gradient cap */}
-      <div className="h-[2px] shrink-0 bg-gradient-to-r from-violet-600 via-indigo-500 to-cyan-500" />
+      <div className="h-[2px] shrink-0" style={{ background: 'linear-gradient(90deg, #c8506b, #a03050, #c8506b)' }} />
 
       {/* ── Header ── */}
       <header style={{ background: tabBarBg, borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', height: 52, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, boxShadow: '0 4px 12px rgba(99,102,241,0.4)' }}>📡</div>
+          {/* Kubocare logo mark */}
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#c8506b,#a03050)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(200,80,107,0.45)', flexShrink: 0 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="rgba(255,255,255,0.15)" />
+              <path d="M8 8h3v8H8zM13 8h3v4h-3zM13 14h3v2h-3z" fill="white" />
+            </svg>
+          </div>
           <div>
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 800, letterSpacing: '-0.02em', color: dark ? '#f1f5f9' : '#0f172a' }}>
-              Radar Room Configurator
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em', color: dark ? '#f1f5f9' : '#0f172a', fontFamily: "'Sora', sans-serif" }}>
+              Kubocare <span style={{ color: '#c8506b' }}>Room Config</span>
             </p>
             <p style={{ margin: 0, fontSize: 10, color: textMuted }}>
               {tab.label} · {objects.length} objects · {room.width} × {room.height} m
             </p>
           </div>
           {/* Project badge */}
-          <div style={{ marginLeft: 6, padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)' }}>
+          <div style={{ marginLeft: 6, padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: dark ? 'rgba(200,80,107,0.1)' : 'rgba(200,80,107,0.08)', color: '#c8506b', border: '1px solid rgba(200,80,107,0.25)' }}>
             Utsav 505 BM
           </div>
         </div>
