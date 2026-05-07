@@ -18,6 +18,7 @@ function makeObject(overrides: Partial<RoomObject> = {}): RoomObject {
 
 const defaultProps = {
   room,
+  objects: [],
   dark: true,
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
@@ -29,9 +30,9 @@ const defaultProps = {
 };
 
 describe('PropertiesPanel — empty state', () => {
-  it('shows nothing selected when no object', () => {
+  it('shows export preview when no object selected', () => {
     render(<PropertiesPanel {...defaultProps} object={null} />);
-    expect(screen.getByText('Nothing selected')).toBeInTheDocument();
+    expect(screen.getByText('Export Preview')).toBeInTheDocument();
   });
 });
 

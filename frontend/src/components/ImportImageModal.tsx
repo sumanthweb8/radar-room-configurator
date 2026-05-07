@@ -44,7 +44,8 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef    = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const bg          = dark ? '#0d1117'                : '#ffffff';
   const border      = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
@@ -53,18 +54,24 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
   const inputBorder = dark ? 'rgba(255,255,255,0.1)'  : 'rgba(0,0,0,0.12)';
   const dropBg      = dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)';
 
+  const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+
   function pickFile(f: File) {
     setFile(f);
     setError(null);
-    const url = URL.createObjectURL(f);
-    setPreview(url);
+    if (isPdf(f)) {
+      setPreview(null); // no image preview for PDFs
+    } else {
+      const url = URL.createObjectURL(f);
+      setPreview(url);
+    }
   }
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files[0];
-    if (f && (f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name))) pickFile(f);
+    if (f) pickFile(f);
   }, []);
 
   async function handleImport() {
@@ -72,18 +79,36 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
     setLoading(true);
     setError(null);
     try {
-      // Convert to JPEG in browser (works for HEIC on Safari/Mac)
-      const jpeg = await toJpegBlob(file);
       const form = new FormData();
-      form.append('file', new File([jpeg], 'upload.jpg', { type: 'image/jpeg' }));
-      const res = await fetch('http://localhost:8000/api/import-image', { method: 'POST', body: form });
-      if (!res.ok) {
-        const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
-        throw new Error(detail);
+
+      if (isPdf(file)) {
+        // ── Metaroom PDF path ──────────────────────────────────────────────
+        form.append('file', file);
+        const res = await fetch('/api/import-metaroom', { method: 'POST', body: form });
+        if (!res.ok) {
+          const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
+          throw new Error(detail);
+        }
+        const data = await res.json();
+        // Pass the full multi-room payload — App.tsx will create one tab per room
+        if (data.rooms && data.rooms.length > 0) {
+          onImport({ rooms: data.rooms } as any);
+        }
+      } else {
+        // ── Image path (Claude vision) — returns same rooms[] format ──────
+        const jpeg = await toJpegBlob(file);
+        form.append('file', new File([jpeg], 'upload.jpg', { type: 'image/jpeg' }));
+        const res = await fetch('/api/import-image', { method: 'POST', body: form });
+        if (!res.ok) {
+          const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
+          throw new Error(detail);
+        }
+        const data = await res.json();
+        // Both PDF and image now return { rooms: [...] }
+        onImport(data.rooms ? data : { rooms: [data] });
       }
-      const data = await res.json();
-      onImport(data);
     } catch (e: any) {
+      console.error('Import error:', e);
       setError(e.message ?? 'Something went wrong');
     } finally {
       setLoading(false);
@@ -101,14 +126,45 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
           <div style={{ width: 38, height: 38, borderRadius: 11, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🗺</div>
           <div>
             <p style={{ fontSize: 14, fontWeight: 700, color: textMd, margin: 0 }}>Import Floor Plan</p>
-            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Upload an image — Claude extracts the layout</p>
+            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Upload an image or Metaroom PDF to extract the layout</p>
           </div>
           <button onClick={onCancel} style={{ marginLeft: 'auto', width: 26, height: 26, borderRadius: 7, background: 'transparent', border: `1px solid ${inputBorder}`, cursor: 'pointer', color: textSm, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
         </div>
 
-        {/* Drop zone */}
+        {/* Two picker buttons side by side */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button
+            onClick={() => inputRef.current?.click()}
+            style={{
+              flex: 1, padding: '10px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+              border: `1px solid ${inputBorder}`, background: dropBg,
+              color: textMd, fontSize: 12, fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            }}
+          >
+            🖼 Browse Image
+          </button>
+          <button
+            onClick={() => pdfInputRef.current?.click()}
+            style={{
+              flex: 1, padding: '10px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+              border: '1px solid rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.08)',
+              color: '#a78bfa', fontSize: 12, fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            }}
+          >
+            📄 Browse Metaroom PDF
+          </button>
+        </div>
+
+        {/* Hidden inputs */}
+        <input ref={inputRef} type="file" accept="image/*,.heic,.heif" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
+        <input ref={pdfInputRef} type="file" accept=".pdf" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
+
+        {/* Drop zone — shows selected file info or drag hint */}
         <div
-          onClick={() => inputRef.current?.click()}
           onDrop={onDrop}
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
@@ -116,27 +172,21 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
             border: `2px dashed ${dragOver ? '#6366f1' : inputBorder}`,
             borderRadius: 12, background: dragOver ? 'rgba(99,102,241,0.08)' : dropBg,
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            height: preview ? 'auto' : 130, cursor: 'pointer', transition: 'all 0.15s', overflow: 'hidden',
+            minHeight: 90, transition: 'all 0.15s', overflow: 'hidden', padding: 8,
           }}
         >
           {preview ? (
-            <img src={preview} alt="preview" style={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} />
+            <img src={preview} alt="preview" style={{ maxWidth: '100%', maxHeight: 180, objectFit: 'contain', display: 'block' }} />
+          ) : file && isPdf(file) ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontSize: 32 }}>📄</div>
+              <p style={{ fontSize: 12, fontWeight: 600, color: '#a78bfa', margin: 0 }}>{file.name}</p>
+              <p style={{ fontSize: 10, color: textSm, margin: 0 }}>Metaroom PDF · {(file.size / 1024).toFixed(0)} KB — ready to import</p>
+            </div>
           ) : (
-            <>
-              <div style={{ fontSize: 28, marginBottom: 6 }}>🖼</div>
-              <p style={{ fontSize: 13, fontWeight: 500, color: textMd, margin: 0 }}>Click or drag image here</p>
-              <p style={{ fontSize: 11, color: textSm, margin: '3px 0 0' }}>PNG · JPG · WEBP · HEIC</p>
-            </>
+            <p style={{ fontSize: 11, color: textSm, margin: 0 }}>or drag & drop a file here</p>
           )}
-          <input ref={inputRef} type="file" accept="image/*,.heic,.heif" style={{ display: 'none' }}
-            onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
         </div>
-
-        {file && (
-          <p style={{ fontSize: 11, color: textSm, margin: '6px 0 0', fontFamily: 'monospace' }}>
-            {file.name} · {(file.size / 1024).toFixed(0)} KB
-          </p>
-        )}
 
         {/* Error */}
         {error && (
@@ -151,7 +201,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
         {loading && (
           <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #6366f1', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>Claude is reading your floor plan…</p>
+            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>{file && isPdf(file) ? 'Parsing Metaroom PDF…' : 'Claude is reading and placing every room & object…'}</p>
           </div>
         )}
 
@@ -169,7 +219,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
               fontSize: 12, fontWeight: 700, cursor: (!file || loading) ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit', transition: 'all 0.15s',
             }}>
-            {loading ? 'Extracting…' : '✦ Extract & Import'}
+            {loading ? (file && isPdf(file) ? 'Parsing…' : 'Extracting…') : '✦ Extract & Import'}
           </button>
         </div>
 

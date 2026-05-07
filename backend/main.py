@@ -31,6 +31,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from fastapi.middleware.cors import CORSMiddleware
 
 from detection import DetectionConfig, detect_walls, get_image_dimensions, hand_drawn_config
+from metaroom import is_metaroom_pdf, parse_metaroom_pdf
 from dimension_matcher import match_dimensions
 from geometry import GeometryConfig, GeometryEngine, hand_drawn_geo_config
 from models import AnalyzeResponse, FloorPlan, Room, Wall
@@ -134,40 +135,52 @@ async def analyze(
 
 # ─── import-image ────────────────────────────────────────────────────────────
 
-IMPORT_PROMPT = """You are a floor plan data extractor. Analyze this floor plan image and return ONLY a valid JSON object — no markdown, no explanation.
+IMPORT_PROMPT = """You are a precise architectural floor plan extractor. Analyze this floor plan image carefully and return ONLY a valid JSON object — no markdown, no explanation, no extra text.
 
-The JSON must exactly match this schema:
+STEP 1 — Identify every distinct room/space in the image (bedroom, living room, kitchen, bathroom, corridor, etc.).
+STEP 2 — For each room, measure its width and height in metres using any scale bar, dimension labels, or standard proportions visible. If no scale is shown, estimate from standard sizes (single bed = 0.9×1.9 m, double bed = 1.4×2.0 m, door = 0.9 m wide, toilet = 0.7×1.2 m, sofa = 2.0×0.9 m).
+STEP 3 — For every object/fixture inside each room, compute its x,y position as metres from that room's own top-left corner (x=0 is left wall, y=0 is top wall).
+
+Return this exact JSON schema:
 {
-  "room": {
-    "name": "string (e.g. 'Apartment', '2BHK')",
-    "width": number,   // total room/apartment width in metres
-    "height": number   // total room/apartment height in metres
-  },
-  "objects": [
+  "rooms": [
     {
-      "type": "bed|sofa|table|desk|chair|wardrobe|cabinet|door|window|radar|person|custom",
-      "label": "string (e.g. 'Master Bed', 'Bathroom Door')",
-      "x": number,      // distance from left wall in metres (top-left corner)
-      "y": number,      // distance from top wall in metres (top-left corner)
-      "width": number,  // object width in metres
-      "height": number, // object depth/height in metres
-      "rotation": 0     // 0, 90, 180, or 270
+      "room": {
+        "name": "string — exact room label from the image, e.g. 'Master Bedroom', 'Living Room', 'Kitchen'",
+        "width": number,   // room width in metres (left-to-right)
+        "height": number   // room depth in metres (top-to-bottom)
+      },
+      "objects": [
+        {
+          "type": "bed|sofa|table|desk|chair|wardrobe|cabinet|door|window|radar|person|custom",
+          "label": "string — descriptive name, e.g. 'Double Bed', 'Entry Door', 'Window (north)'",
+          "x": number,      // metres from room's LEFT wall to object's left edge
+          "y": number,      // metres from room's TOP wall to object's top edge
+          "width": number,  // object width in metres
+          "height": number, // object depth in metres
+          "rotation": 0     // 0, 90, 180, or 270 degrees clockwise
+        }
+      ]
     }
   ]
 }
 
-Rules:
-- Measure all sizes in metres. If no scale is given, estimate realistically (e.g. standard door = 0.9m wide, single bed = 0.9×1.9m, double bed = 1.4×2.0m, sofa = 2.0×0.9m, bathroom = ~2×1.5m).
-- x=0 is the LEFT wall, y=0 is the TOP wall.
-- Include doors and windows as objects with type "door" or "window".
-- For rooms labeled "bedroom" include a bed. For "bathroom" include nothing (just note the space). For "living" include sofa.
-- If the image shows multiple rooms, set room width/height to the TOTAL bounding box and place all objects within it.
-- Rotation: use 90 if the object is rotated 90 degrees clockwise, etc.
-- Output ONLY the JSON, no other text."""
+Critical rules:
+- ONE entry per room in the "rooms" array — never merge multiple rooms into one.
+- Coordinates are ROOM-LOCAL — each room's own top-left is (0,0). Do NOT use global image coordinates.
+- Every door and window must appear as an object with type "door" or "window". Place them at the wall edge (x≈0 or x≈room.width for side walls; y≈0 or y≈room.height for top/bottom walls).
+- Walls themselves are NOT objects — only furniture, fixtures, doors, windows.
+- If the image shows dimension numbers (e.g. "3.5m", "2400"), use them exactly. Round to 2 decimal places.
+- Doors: width = leaf width (0.7–1.0 m), height = wall thickness (~0.1–0.15 m). Place at the wall where the door opening is.
+- Windows: width = glazing width, height = wall thickness (~0.1–0.15 m). Place at the wall edge.
+- Beds: include headboard direction by using rotation. Headboard is at y=0 side by default (rotation=0).
+- For any unlabeled furniture use type "custom" with a descriptive label.
+- Output ONLY the JSON object. No other text whatsoever."""
+
 
 @app.post("/api/import-image")
 async def import_image(file: UploadFile = File(...)):
-    """Use Claude vision to extract floor plan data from an uploaded image."""
+    """Use Claude vision to extract floor plan data from an uploaded image. Returns same rooms[] format as import-metaroom."""
     content = await file.read()
     ext = (os.path.splitext(file.filename or "")[1] or ".png").lstrip(".").lower()
     media_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
@@ -190,11 +203,12 @@ async def import_image(file: UploadFile = File(...)):
     media_type = media_map.get(ext, "image/png")
     b64 = base64.standard_b64encode(content).decode("utf-8")
 
+    raw = ""
     try:
         client = anthropic.Anthropic()
         message = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2048,
+            model="claude-opus-4-6",
+            max_tokens=4096,
             messages=[
                 {
                     "role": "user",
@@ -212,6 +226,11 @@ async def import_image(file: UploadFile = File(...)):
         raw = re.sub(r"\n?```$", "", raw)
 
         data = json.loads(raw)
+
+        # Normalise: if Claude returned old single-room format, wrap it
+        if "room" in data and "rooms" not in data:
+            data = {"rooms": [{"room": data["room"], "objects": data.get("objects", [])}]}
+
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"Claude returned invalid JSON: {exc}\nRaw: {raw[:500]}")
     except anthropic.APIError as exc:
@@ -221,6 +240,44 @@ async def import_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Import error: {exc}\n{traceback.format_exc()}")
 
     return data
+
+
+# ─── import-metaroom ─────────────────────────────────────────────────────────
+
+@app.post("/api/import-metaroom")
+async def import_metaroom(file: UploadFile = File(...)):
+    """Parse a Metaroom by Amrax PDF and return all rooms as importable layouts."""
+    content = await file.read()
+
+    if not is_metaroom_pdf(content):
+        raise HTTPException(status_code=422, detail="File does not appear to be a Metaroom PDF.")
+
+    try:
+        report = parse_metaroom_pdf(content)
+    except Exception as exc:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Metaroom parse error: {exc}\n{traceback.format_exc()}")
+
+    # Convert to list of rooms in the frontend's expected shape
+    rooms = []
+    for room in report.rooms:
+        rooms.append({
+            "room": {"name": room.name, "width": round(room.width, 3), "height": round(room.height, 3)},
+            "objects": [
+                {
+                    "type":     obj.type,
+                    "label":    obj.label,
+                    "x":        round(obj.x, 3),
+                    "y":        round(obj.y, 3),
+                    "width":    round(obj.width, 3),
+                    "height":   round(obj.height, 3),
+                    "rotation": obj.rotation,
+                }
+                for obj in room.objects
+            ],
+        })
+
+    return {"rooms": rooms, "floor": report.floor.__dict__ if report.floor else None}
 
 
 # ─── refine ──────────────────────────────────────────────────────────────────

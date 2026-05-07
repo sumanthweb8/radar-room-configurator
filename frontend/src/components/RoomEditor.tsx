@@ -124,28 +124,165 @@ function SofaShape({ w, h, color }: { w: number; h: number; color: string }) {
 }
 
 function DoorShape({ w, h, color }: { w: number; h: number; color: string }) {
-  const swing = Math.max(w, h);
+  // Wall opening (portrait): h >> w — e.g. a door gap in a side wall shown in plan view.
+  // The swing arc must NOT extend beyond the strip; instead render architectural wall-gap markers.
+  if (h > w * 1.5) {
+    const capLen = Math.min(w * 1.6, 8);  // small perpendicular caps at each end
+    const cx = w / 2;
+    return (
+      <g>
+        {/* Opening fill */}
+        <rect x={0} y={0} width={w} height={h} fill={color + '38'} rx={1} />
+        {/* Wall-end caps (top) */}
+        <line x1={cx - capLen} y1={1.5} x2={cx + capLen} y2={1.5}
+          stroke={color} strokeWidth={2.5} strokeLinecap="round" />
+        {/* Wall-end caps (bottom) */}
+        <line x1={cx - capLen} y1={h - 1.5} x2={cx + capLen} y2={h - 1.5}
+          stroke={color} strokeWidth={2.5} strokeLinecap="round" />
+        {/* Outer border */}
+        <rect x={0} y={0} width={w} height={h} fill="none" stroke={color} strokeWidth={1.2} rx={1} />
+        {/* Quarter-circle swing drawn INSIDE the strip (from top-end, radius = w) */}
+        <path
+          d={`M ${cx} ${h * 0.18} A ${w * 0.9} ${w * 0.9} 0 0 1 ${cx} ${h * 0.18 + w * 0.9 * 2}`}
+          fill="none" stroke={color + '90'} strokeWidth={0.8} strokeDasharray="3 2"
+          clipPath={`inset(0 0 0 0)`}
+        />
+        {/* Hinge dot */}
+        <circle cx={cx} cy={h * 0.18} r={2} fill={color} />
+      </g>
+    );
+  }
+
+  // Swinging door (landscape): w >= h — standard floor-plan door with arc.
+  const swing = w;   // swing radius = door leaf width (not max(w,h) which caused the overflow)
   return (
     <g>
-      {/* Door panel */}
+      {/* Door leaf */}
       <rect x={0} y={0} width={w} height={h} fill={color + '30'} stroke={color} strokeWidth={1.5} rx={2} />
-      {/* Swing arc */}
+      {/* Swing arc — constrained to the door's own width */}
       <path d={`M 0 ${h / 2} A ${swing} ${swing} 0 0 1 ${swing} ${h / 2}`}
         fill={color + '12'} stroke={color + '70'} strokeWidth={1} strokeDasharray="4 3" />
-      <line x1={0} y1={h / 2} x2={swing} y2={h / 2} stroke={color + '70'} strokeWidth={0.8} strokeDasharray="4 3" />
+      <line x1={0} y1={h / 2} x2={swing} y2={h / 2}
+        stroke={color + '70'} strokeWidth={0.8} strokeDasharray="4 3" />
       {/* Hinge dot */}
       <circle cx={0} cy={h / 2} r={2.5} fill={color} />
     </g>
   );
 }
 
-function WindowShape({ w, h, color }: { w: number; h: number; color: string }) {
+function WindowShape({ w, h }: { w: number; h: number; color: string }) {
+  // Standard architectural floor-plan window symbol:
+  // A wall opening filled with glass, shown as two parallel frame lines
+  // with a glass-blue fill between them and a subtle reflection glint.
+  // Works in both landscape (wide) and portrait (tall) orientation.
+
+  const isLandscape = w >= h;
+  const frameT = isLandscape
+    ? Math.max(2, Math.min(h * 0.18, 5))   // frame rail thickness (along short axis)
+    : Math.max(2, Math.min(w * 0.18, 5));
+
+  // Glass fill color — crisp sky-blue, semi-transparent
+  const glassFill   = 'rgba(147,210,255,0.38)';
+  const glassStroke = 'rgba(100,180,255,0.85)';
+  const frameColor  = '#1e3a5c';
+  const sillColor   = '#2c5282';
+
+  if (isLandscape) {
+    // ── Landscape window (wide strip in a horizontal wall) ──────────────────
+    // outer sill fills → inner glass band → frame rails → reflection
+    const midY = h / 2;
+    const glassT = h - frameT * 2;
+
+    // Number of panes (mullions every ~30px, minimum 1)
+    const paneCount = Math.max(1, Math.floor(w / 30));
+    const paneW = w / paneCount;
+
+    return (
+      <g>
+        {/* Outer sill/reveal (dark, full height) */}
+        <rect x={0} y={0} width={w} height={h} fill={sillColor} rx={1} />
+
+        {/* Glass band */}
+        <rect x={0} y={frameT} width={w} height={glassT} fill={glassFill} />
+
+        {/* Mullion dividers */}
+        {Array.from({ length: paneCount - 1 }, (_, i) => (
+          <line key={i}
+            x1={(i + 1) * paneW} y1={frameT}
+            x2={(i + 1) * paneW} y2={frameT + glassT}
+            stroke={glassStroke} strokeWidth={1.2}
+          />
+        ))}
+
+        {/* Frame rails (top + bottom) */}
+        <rect x={0} y={0}          width={w} height={frameT} fill={frameColor} />
+        <rect x={0} y={h - frameT} width={w} height={frameT} fill={frameColor} />
+
+        {/* Glass reflection — thin diagonal glint per pane */}
+        {Array.from({ length: paneCount }, (_, i) => {
+          const px = i * paneW;
+          const glintX = px + paneW * 0.22;
+          const glintLen = paneW * 0.28;
+          return (
+            <line key={i}
+              x1={glintX} y1={frameT + 1.5}
+              x2={glintX + glintLen} y2={frameT + glassT - 1.5}
+              stroke="rgba(255,255,255,0.55)" strokeWidth={1} strokeLinecap="round"
+            />
+          );
+        })}
+
+        {/* Outer border */}
+        <rect x={0} y={0} width={w} height={h}
+          fill="none" stroke={glassStroke} strokeWidth={1.2} rx={1} />
+      </g>
+    );
+  }
+
+  // ── Portrait window (tall strip in a vertical/side wall) ──────────────────
+  const midX = w / 2;
+  const glassW = w - frameT * 2;
+  const paneCount = Math.max(1, Math.floor(h / 30));
+  const paneH = h / paneCount;
+
   return (
     <g>
-      <rect x={0} y={0} width={w} height={h} fill={color + '30'} stroke={color} strokeWidth={1.5} rx={1} />
-      {/* Glass panes */}
-      <line x1={w / 2} y1={1} x2={w / 2} y2={h - 1} stroke={color + 'aa'} strokeWidth={1} />
-      <line x1={1} y1={h / 2} x2={w - 1} y2={h / 2} stroke={color + 'aa'} strokeWidth={0.5} strokeDasharray="3 2" />
+      {/* Outer sill/reveal */}
+      <rect x={0} y={0} width={w} height={h} fill={sillColor} rx={1} />
+
+      {/* Glass band */}
+      <rect x={frameT} y={0} width={glassW} height={h} fill={glassFill} />
+
+      {/* Mullion dividers */}
+      {Array.from({ length: paneCount - 1 }, (_, i) => (
+        <line key={i}
+          x1={frameT} y1={(i + 1) * paneH}
+          x2={frameT + glassW} y2={(i + 1) * paneH}
+          stroke={glassStroke} strokeWidth={1.2}
+        />
+      ))}
+
+      {/* Frame rails (left + right) */}
+      <rect x={0}          y={0} width={frameT} height={h} fill={frameColor} />
+      <rect x={w - frameT} y={0} width={frameT} height={h} fill={frameColor} />
+
+      {/* Reflection glints */}
+      {Array.from({ length: paneCount }, (_, i) => {
+        const py = i * paneH;
+        const glintY = py + paneH * 0.22;
+        const glintLen = paneH * 0.28;
+        return (
+          <line key={i}
+            x1={frameT + 1.5} y1={glintY}
+            x2={frameT + glassW - 1.5} y2={glintY + glintLen}
+            stroke="rgba(255,255,255,0.55)" strokeWidth={1} strokeLinecap="round"
+          />
+        );
+      })}
+
+      {/* Outer border */}
+      <rect x={0} y={0} width={w} height={h}
+        fill="none" stroke={glassStroke} strokeWidth={1.2} rx={1} />
     </g>
   );
 }
@@ -483,19 +620,123 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
           ));
         })()}
 
-        {/* ── Radar crosshair ── */}
+        {/* ── Radar crosshair + coverage zone ── */}
         {radarObj && (() => {
-          const rcx = RX + (radarObj.x + radarObj.width  / 2) * scale;
-          const rcy = RY + (radarObj.y + radarObj.height / 2) * scale;
+          const RANGE = 4.0, SIDE = 2.0;
+          const rox = radarObj.x + radarObj.width  / 2;
+          const roy = radarObj.y + radarObj.height / 2;
+          const rcx = RX + rox * scale;
+          const rcy = RY + roy * scale;
+
+          // Nearest wall → coverage direction in room-space
+          const dTop    = roy;
+          const dBottom = room.height - roy;
+          const dLeft   = rox;
+          const dRight  = room.width - rox;
+          const minD    = Math.min(dTop, dBottom, dLeft, dRight);
+
+          // coverage rect in room coords: [x1,y1,x2,y2]
+          let cx1: number, cy1: number, cx2: number, cy2: number;
+          let gridAxis: 'h' | 'v'; // h = horizontal gridlines inside rect, v = vertical
+          if (minD === dTop) {
+            // wall is top → coverage goes downward
+            cx1 = rox - SIDE; cy1 = 0;
+            cx2 = rox + SIDE; cy2 = RANGE;
+            gridAxis = 'h';
+          } else if (minD === dBottom) {
+            // wall is bottom → coverage goes upward
+            cx1 = rox - SIDE; cy1 = room.height - RANGE;
+            cx2 = rox + SIDE; cy2 = room.height;
+            gridAxis = 'h';
+          } else if (minD === dLeft) {
+            // wall is left → coverage goes rightward
+            cx1 = 0;           cy1 = roy - SIDE;
+            cx2 = RANGE;       cy2 = roy + SIDE;
+            gridAxis = 'v';
+          } else {
+            // wall is right → coverage goes leftward
+            cx1 = room.width - RANGE; cy1 = roy - SIDE;
+            cx2 = room.width;         cy2 = roy + SIDE;
+            gridAxis = 'v';
+          }
+
+          // Clamp to room bounds
+          cx1 = Math.max(0, cx1); cy1 = Math.max(0, cy1);
+          cx2 = Math.min(room.width, cx2); cy2 = Math.min(room.height, cy2);
+
+          // Convert to SVG px
+          const sx1 = RX + cx1 * scale, sy1 = RY + cy1 * scale;
+          const sx2 = RX + cx2 * scale, sy2 = RY + cy2 * scale;
+          const sw  = sx2 - sx1, sh = sy2 - sy1;
+
+          // Grid lines at 1m, 2m, 3m inside coverage (parallel to the near wall)
+          const gridLines: React.ReactNode[] = [];
+          if (gridAxis === 'h') {
+            // horizontal lines at distances 1m, 2m, 3m from radar wall
+            const wallY = minD === dTop ? 0 : room.height;
+            const dir   = minD === dTop ? 1 : -1;
+            [1, 2, 3].forEach((d, i) => {
+              const gy = RY + (wallY + dir * d) * scale;
+              if (gy > sy1 && gy < sy2)
+                gridLines.push(<line key={d} x1={sx1} y1={gy} x2={sx2} y2={gy}
+                  stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 3" opacity={0.35 - i * 0.08} />);
+            });
+          } else {
+            const wallX = minD === dLeft ? 0 : room.width;
+            const dir   = minD === dLeft ? 1 : -1;
+            [1, 2, 3].forEach((d, i) => {
+              const gx = RX + (wallX + dir * d) * scale;
+              if (gx > sx1 && gx < sx2)
+                gridLines.push(<line key={d} x1={gx} y1={sy1} x2={gx} y2={sy2}
+                  stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 3" opacity={0.35 - i * 0.08} />);
+            });
+          }
+
           return (
             <g style={{ pointerEvents: 'none' }}>
-              {/* Full-room axis lines */}
-              <line x1={RX} y1={rcy} x2={RX + W} y2={rcy} stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 4" opacity={0.55} />
-              <line x1={rcx} y1={RY} x2={rcx} y2={RY + H} stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 4" opacity={0.55} />
+              {/* Coverage fill */}
+              <rect x={sx1} y={sy1} width={sw} height={sh}
+                fill="#8b5cf6" fillOpacity={0.08} />
+
+              {/* Coverage border */}
+              <rect x={sx1} y={sy1} width={sw} height={sh}
+                fill="none" stroke="#a78bfa" strokeWidth={1.2} strokeDasharray="8 4" opacity={0.65} />
+
+              {/* Depth grid lines */}
+              {gridLines}
+
+              {/* Beam line from radar centre to far edge centre */}
+              {(() => {
+                const farCx = minD === dLeft ? sx1 : minD === dRight ? sx2 : rcx;
+                const farCy = minD === dTop  ? sy1 : minD === dBottom ? sy2 : rcy;
+                return <line x1={rcx} y1={rcy} x2={farCx} y2={farCy}
+                  stroke="#c4b5fd" strokeWidth={1} strokeDasharray="5 3" opacity={0.5} />;
+              })()}
+
+              {/* Coverage label — range badge on far edge */}
+              {(() => {
+                const lx = (sx1 + sx2) / 2;
+                const ly = minD === dTop ? sy1 - 4 : minD === dBottom ? sy2 + 12
+                         : minD === dLeft ? sx1 - 4 : sx2 + 12; // reuse lx for vertical
+                const labelX = (gridAxis === 'v' && minD === dLeft) ? sx1 - 2 : (gridAxis === 'v' && minD === dRight) ? sx2 + 2 : lx;
+                const labelY = (gridAxis === 'h' && minD === dTop) ? sy1 - 4 : (gridAxis === 'h' && minD === dBottom) ? sy2 + 12 : (sy1 + sy2) / 2;
+                return (
+                  <g>
+                    <rect x={labelX - 22} y={labelY - 9} width={44} height={13} rx={4} fill="#7c3aed" opacity={0.85} />
+                    <text x={labelX} y={labelY} textAnchor="middle" fontSize={8} fill="white" fontFamily="monospace" fontWeight={700}>4m · ±2m</text>
+                  </g>
+                );
+              })()}
+
+              {/* Axis crosshair lines */}
+              <line x1={RX} y1={rcy} x2={RX + W} y2={rcy} stroke="#a78bfa" strokeWidth={0.6} strokeDasharray="5 4" opacity={0.3} />
+              <line x1={rcx} y1={RY} x2={rcx} y2={RY + H} stroke="#a78bfa" strokeWidth={0.6} strokeDasharray="5 4" opacity={0.3} />
+
               {/* Origin dot */}
-              <circle cx={rcx} cy={rcy} r={5} fill="#7c3aed" opacity={0.85} />
+              <circle cx={rcx} cy={rcy} r={5} fill="#7c3aed" opacity={0.9} />
               <circle cx={rcx} cy={rcy} r={2.5} fill="#fff" />
-              {/* Label */}
+
+              {/* 0,0 label */}
               <rect x={rcx + 8} y={rcy - 11} width={34} height={13} rx={3} fill="#7c3aed" opacity={0.85} />
               <text x={rcx + 25} y={rcy - 2} textAnchor="middle" fontSize={8} fill="white" fontFamily="monospace" fontWeight={700}>0, 0</text>
             </g>

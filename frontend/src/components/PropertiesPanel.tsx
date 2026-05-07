@@ -4,6 +4,7 @@ import { OBJECT_PRESETS, detectDoorWall } from '../types';
 
 interface Props {
   object: RoomObject | null;
+  objects: RoomObject[];
   room: RoomConfig;
   onUpdate: (patch: Partial<RoomObject>) => void;
   onDelete: () => void;
@@ -65,7 +66,7 @@ const Section: React.FC<{ title: string; textSm: string; children: React.ReactNo
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export const PropertiesPanel: React.FC<Props> = ({
-  object, room, onUpdate, onDelete, onDeselect, dark,
+  object, objects, room, onUpdate, onDelete, onDeselect, dark,
   adjacentRooms, onAddAdjacentRoom, onUpdateAdjacentRoom, onRemoveAdjacentRoom,
   radarObj = null,
 }) => {
@@ -78,13 +79,66 @@ export const PropertiesPanel: React.FC<Props> = ({
 
   const fieldProps = { inputBg, inputBorder, textSm, dark };
 
-  // ── Empty state ────────────────────────────────────────────────────────────
+  // ── Empty state — show live config export preview ─────────────────────────
   if (!object) {
+    const radar   = objects.find(o => o.type === 'radar');
+    const originX = radar ? radar.x + radar.width  / 2 : 0;
+    const originY = radar ? radar.y + radar.height / 2 : 0;
+
+    const configObjs = objects.map(obj => {
+      const left   = +(obj.x             - originX).toFixed(3);
+      const right  = +(obj.x + obj.width  - originX).toFixed(3);
+      const top    = +(originY - obj.y            ).toFixed(3);
+      const bottom = +(originY - (obj.y + obj.height)).toFixed(3);
+      return { name: obj.label.toLowerCase().replace(/\s+/g,'_'), top_left:[left,top], bottom_right:[right,bottom] };
+    });
+
+    const preview = JSON.stringify({ device_configs: { board: '<board>', location: room.name }, objects: configObjs }, null, 2);
+
     return (
-      <aside style={{ width: 220, background: bg, borderLeft: `1px solid ${border}`, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-        <div style={{ width: 48, height: 48, borderRadius: 16, background: inputBg, border: `1px solid ${inputBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, marginBottom: 12, opacity: 0.5 }}>⬚</div>
-        <p style={{ fontSize: 12, fontWeight: 500, color: textMd, marginBottom: 4 }}>Nothing selected</p>
-        <p style={{ fontSize: 11, color: textSm, textAlign: 'center', lineHeight: 1.5 }}>Click an object on the canvas to edit it</p>
+      <aside style={{ width: 240, background: bg, borderLeft: `1px solid ${border}`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>↓</div>
+          <div>
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>Export Preview</p>
+            <p style={{ margin: 0, fontSize: 10, color: textSm }}>{objects.length} objects · {room.width}×{room.height} m</p>
+          </div>
+        </div>
+
+        {/* Radar origin badge */}
+        {radar ? (
+          <div style={{ margin: '10px 12px 0', padding: '7px 10px', borderRadius: 8, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 14 }}>📡</span>
+            <div>
+              <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: '#818cf8' }}>Radar origin (0, 0)</p>
+              <p style={{ margin: 0, fontSize: 9, color: textSm, fontFamily: 'monospace' }}>x={radar.x.toFixed(3)} y={radar.y.toFixed(3)} m</p>
+            </div>
+          </div>
+        ) : (
+          <div style={{ margin: '10px 12px 0', padding: '7px 10px', borderRadius: 8, background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.2)' }}>
+            <p style={{ margin: 0, fontSize: 10, color: '#f59e0b' }}>⚠ No radar placed — coordinates are room-relative</p>
+          </div>
+        )}
+
+        {/* JSON preview */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px' }}>
+          <p style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: textSm, marginBottom: 6 }}>Config JSON</p>
+          <pre style={{
+            margin: 0, fontSize: 9.5, lineHeight: 1.65,
+            fontFamily: 'monospace',
+            color: dark ? '#7dd3fc' : '#0369a1',
+            background: dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.04)',
+            border: `1px solid ${inputBorder}`,
+            borderRadius: 8, padding: '10px 10px',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          }}>{preview}</pre>
+        </div>
+
+        {/* Hint */}
+        <div style={{ padding: '10px 12px', borderTop: `1px solid ${border}` }}>
+          <p style={{ margin: 0, fontSize: 10, color: textSm, textAlign: 'center', lineHeight: 1.5 }}>Click any object to edit · ↓ Export to download full config</p>
+        </div>
       </aside>
     );
   }
