@@ -81,10 +81,12 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
     try {
       const form = new FormData();
 
+      const API = import.meta.env.VITE_API_BASE ?? '';
+
       if (isPdf(file)) {
         // ── Metaroom PDF path ──────────────────────────────────────────────
         form.append('file', file);
-        const res = await fetch('/api/import-metaroom', { method: 'POST', body: form });
+        const res = await fetch(`${API}/api/import-metaroom`, { method: 'POST', body: form });
         if (!res.ok) {
           const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
           throw new Error(detail);
@@ -98,7 +100,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
         // ── Image path (Claude vision) — returns same rooms[] format ──────
         const jpeg = await toJpegBlob(file);
         form.append('file', new File([jpeg], 'upload.jpg', { type: 'image/jpeg' }));
-        const res = await fetch('/api/import-image', { method: 'POST', body: form });
+        const res = await fetch(`${API}/api/import-image`, { method: 'POST', body: form });
         if (!res.ok) {
           const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
           throw new Error(detail);
