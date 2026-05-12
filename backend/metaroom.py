@@ -68,6 +68,7 @@ class RoomObject:
     width: float
     height: float
     rotation: int = 0
+    z: Optional[float] = None  # mounting height above floor (metres) — set for radar
 
 
 @dataclass
@@ -190,7 +191,7 @@ _KNOWN_TYPES = [
     "Door area", "Window area",
     "Wall", "Toilet", "Sink", "Bed", "Sofa", "Table", "Desk", "Chair",
     "Wardrobe", "Cabinet", "Bathtub", "Stove", "Oven", "Fridge", "Refrigerator",
-    "Storage", "Opening",
+    "Storage", "Opening", "Radar",
 ]
 
 
@@ -627,12 +628,14 @@ def _objects_from_svg(
         svg_landscape  = w_m >= h_m
         table_landscape = row.width_m >= row.depth_m
         rotation = 90 if svg_landscape != table_landscape else 0
+        obj_type = _map_fixture_type(row.type) or "custom"
         objects.append(RoomObject(
-            type=_map_fixture_type(row.type) or "custom",
+            type=obj_type,
             label=row.type,
             x=round(place_x, 3), y=round(place_y, 3),
             width=round(row.width_m, 3), height=round(row.depth_m, 3),
             rotation=rotation,
+            z=2.8 if obj_type == "radar" else None,
         ))
         matched_row_ids.add(id(row))
 
@@ -667,6 +670,7 @@ def _fixtures_only(elements: List[ElementRow], room_w: float, room_h: float) -> 
             y=round(max(0.0, room_h / 2 - row.depth_m / 2 + i * 0.05), 3),
             width=round(row.width_m, 3),
             height=round(row.depth_m, 3),
+            z=2.8 if mapped == "radar" else None,
         ))
     return objs
 
@@ -681,6 +685,7 @@ _FIXTURE_MAP = {
     "chair":       "chair",
     "wardrobe":    "wardrobe",
     "cabinet":     "cabinet",
+    "radar":       "radar",
     # Fixtures with no dedicated preset go to 'custom' but keep their label.
     "toilet":      "custom",
     "sink":        "custom",

@@ -280,6 +280,7 @@ async def import_metaroom(file: UploadFile = File(...)):
                         "x": o.x, "y": o.y,
                         "width": o.width, "height": o.height,
                         "rotation": o.rotation,
+                        **({"z": o.z} if o.z is not None else {}),
                     } for o in r.objects
                 ],
             } for r in report.rooms
