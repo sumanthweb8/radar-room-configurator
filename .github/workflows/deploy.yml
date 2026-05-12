@@ -35,8 +35,10 @@ jobs:
       - name: Build
         working-directory: frontend
         env:
-          VITE_API_BASE: http://localhost:8000
-        run: npm run build
+          # Set this secret in GitHub → Settings → Secrets → Actions
+          # Value: your deployed backend URL, e.g. https://your-app.railway.app
+          VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
+        run: npm run build:gh-pages
 
       - uses: actions/configure-pages@v4
 

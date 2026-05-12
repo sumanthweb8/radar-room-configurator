@@ -25,6 +25,8 @@ from typing import Optional
 import anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # Load .env from the backend directory
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -39,8 +41,13 @@ from ocr import read_dimensions
 
 app = FastAPI(title="Floor Plan Analyzer", version="1.0.0")
 
+# CORS_ORIGINS env var: comma-separated list of extra allowed origins.
+# Example: https://yourname.github.io,https://your-app.vercel.app
+_extra_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_extra_origins,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
