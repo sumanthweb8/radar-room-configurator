@@ -31,6 +31,12 @@ from pypdf import PdfReader
 
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
 
+
+def _tag_name(tag: str) -> str:
+    """Strip XML namespace from SVG tags."""
+    return tag.split("}")[-1]
+
+
 # Tolerances when matching SVG colors (pdftocairo emits high-precision floats).
 _COLOR_TOL = 0.02  # 2% RGB component tolerance
 
@@ -287,11 +293,56 @@ def _color_matches(c: Optional[Tuple[float, float, float]], ref: Tuple[float, fl
 
 
 def _path_style(path_el: ET.Element) -> dict:
+    """
+    Robust SVG style parser.
+
+    Handles BOTH:
+      style="stroke:rgb(...);stroke-width:441"
+    AND:
+      stroke="rgb(...)"
+      stroke-width="441"
+
+    macOS pdftocairo emits different SVG formats than Linux.
+    """
     style = path_el.get("style", "") or ""
+
+    stroke = None
+    fill = None
+    stroke_width = 0.0
+
+    # Parse style=""
+    m = _STROKE_RE.search(style)
+    if m:
+        stroke = _parse_color(m.group(1))
+
+    m = _FILL_RE.search(style)
+    if m:
+        fill = _parse_color(m.group(1))
+
+    m = _STROKE_WIDTH_RE.search(style)
+    if m:
+        try:
+            stroke_width = float(m.group(1))
+        except Exception:
+            pass
+
+    # Fallback to direct SVG attributes
+    if stroke is None:
+        stroke = _parse_color(path_el.get("stroke", "") or "")
+
+    if fill is None:
+        fill = _parse_color(path_el.get("fill", "") or "")
+
+    if stroke_width == 0.0:
+        try:
+            stroke_width = float(path_el.get("stroke-width", 0) or 0)
+        except Exception:
+            pass
+
     return {
-        "stroke": _parse_color(_STROKE_RE.search(style).group(1)) if _STROKE_RE.search(style) else None,
-        "fill":   _parse_color(_FILL_RE.search(style).group(1))   if _FILL_RE.search(style)   else None,
-        "stroke_width": float(_STROKE_WIDTH_RE.search(style).group(1)) if _STROKE_WIDTH_RE.search(style) else 0.0,
+        "stroke": stroke,
+        "fill": fill,
+        "stroke_width": stroke_width,
     }
 
 
@@ -413,29 +464,56 @@ def _objects_from_svg(
     windows: List[Tuple[float, float, float, float]] = []
     thin_blacks: List[Tuple[float, float, float, float]] = []  # other black strokes
 
-    for path in svg_root.iter(f"{{{SVG_NS['svg']}}}path"):
-        s = _path_style(path)
-        bbox = _path_bbox(path.get("d", ""))
+    for el in svg_root.iter():
+        tag = _tag_name(el.tag)
+
+        # Support both path and rect elements
+        if tag not in ("path", "rect"):
+            continue
+
+        s = _path_style(el)
+
+        bbox = None
+
+        # PATH
+        if tag == "path":
+            bbox = _path_bbox(el.get("d", ""))
+
+        # RECT
+        elif tag == "rect":
+            try:
+                x = float(el.get("x", 0) or 0)
+                y = float(el.get("y", 0) or 0)
+                w = float(el.get("width", 0) or 0)
+                h = float(el.get("height", 0) or 0)
+                bbox = (x, y, x + w, y + h)
+            except Exception:
+                continue
+
         if bbox is None:
             continue
-        # Drop degenerate paths (single move, glyph artifacts, tiny ticks).
+
+        # Drop degenerate geometry
         if (bbox[2] - bbox[0]) < 1.0 or (bbox[3] - bbox[1]) < 1.0:
             continue
 
         is_door = (
             _color_matches(s["stroke"], _DOOR_PEACH)
-            or _color_matches(s["fill"],  _DOOR_PEACH)
+            or _color_matches(s["fill"], _DOOR_PEACH)
         )
         is_window = (
             _color_matches(s["stroke"], _WIN_BLUE)
-            or _color_matches(s["fill"],  _WIN_BLUE)
+            or _color_matches(s["fill"], _WIN_BLUE)
         )
+
         if is_door:
             doors.append(bbox)
             continue
+
         if is_window:
             windows.append(bbox)
             continue
+
         if _color_matches(s["stroke"], _BLACK):
             if 350 < s["stroke_width"] < 550:
                 wall_styled.append(bbox)
