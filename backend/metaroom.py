@@ -38,7 +38,7 @@ def _tag_name(tag: str) -> str:
 
 
 # Tolerances when matching SVG colors (pdftocairo emits high-precision floats).
-_COLOR_TOL = 0.02  # 2% RGB component tolerance
+_COLOR_TOL = 0.05  # 5% RGB component tolerance — more robust across OS/version differences
 
 # Reference colors as (r, g, b) in [0, 1].
 _BLACK       = (0.00, 0.00, 0.00)
@@ -536,7 +536,11 @@ def _objects_from_svg(
     if room_w_pt <= 0 or room_h_pt <= 0:
         return _fixtures_only(elements, room_w_m, room_h_m)
 
-    scale = room_w_m / room_w_pt
+    # Average W and H scales — more accurate for non-square rooms where one
+    # axis might be slightly clipped by the page margin.
+    scale_w = room_w_m / room_w_pt
+    scale_h = room_h_m / room_h_pt
+    scale = (scale_w + scale_h) / 2
     inset_pt = min(room_w_pt, room_h_pt) * 0.06  # 6% of the shorter side
 
     def is_interior(bx: Tuple[float, float, float, float]) -> bool:
@@ -565,26 +569,41 @@ def _objects_from_svg(
             (y1 - y0) * scale,
         )
 
+    # Pull authoritative door/window dimensions from the overview table.
+    door_rows  = [r for r in elements if r.type.lower() == "door area"]
+    window_rows = [r for r in elements if r.type.lower() == "window area"]
+
     objects: List[RoomObject] = []
     for i, b in enumerate(doors, start=1):
         x, y, w, h = to_room(b)
         if w < 0.05 or h < 0.05:
             continue
+        # Use table dimensions if available — more accurate than SVG approximation.
+        if i - 1 < len(door_rows):
+            row = door_rows[i - 1]
+            w_out, h_out = row.width_m, row.depth_m
+        else:
+            w_out, h_out = w, h
         objects.append(RoomObject(
             type="door",
             label=f"Door {i}" if len(doors) > 1 else "Door",
             x=round(x, 3), y=round(y, 3),
-            width=round(w, 3), height=round(h, 3),
+            width=round(w_out, 3), height=round(h_out, 3),
         ))
     for i, b in enumerate(windows, start=1):
         x, y, w, h = to_room(b)
         if w < 0.05 or h < 0.05:
             continue
+        if i - 1 < len(window_rows):
+            row = window_rows[i - 1]
+            w_out, h_out = row.width_m, row.depth_m
+        else:
+            w_out, h_out = w, h
         objects.append(RoomObject(
             type="window",
             label=f"Window {i}" if len(windows) > 1 else "Window",
             x=round(x, 3), y=round(y, 3),
-            width=round(w, 3), height=round(h, 3),
+            width=round(w_out, 3), height=round(h_out, 3),
         ))
 
     # Match each interior rectangle to a table fixture row by W × D similarity.
@@ -603,11 +622,17 @@ def _objects_from_svg(
         # Use the SVG-derived centroid; clamp the table-sized fixture inside the room.
         place_x = max(0.0, min(cx_m - row.width_m / 2, room_w_m - row.width_m))
         place_y = max(0.0, min(cy_m - row.depth_m / 2, room_h_m - row.depth_m))
+        # Detect rotation: if SVG bbox is landscape but table says portrait (or vice versa),
+        # the fixture was drawn rotated 90°.
+        svg_landscape  = w_m >= h_m
+        table_landscape = row.width_m >= row.depth_m
+        rotation = 90 if svg_landscape != table_landscape else 0
         objects.append(RoomObject(
             type=_map_fixture_type(row.type) or "custom",
             label=row.type,
             x=round(place_x, 3), y=round(place_y, 3),
             width=round(row.width_m, 3), height=round(row.depth_m, 3),
+            rotation=rotation,
         ))
         matched_row_ids.add(id(row))
 
@@ -624,7 +649,6 @@ def _objects_from_svg(
             width=round(row.width_m, 3),
             height=round(row.depth_m, 3),
         ))
-        placed += 1
         placed += 1
 
     return objects
