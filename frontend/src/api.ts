@@ -4,7 +4,7 @@
 
 import type { AnalyzeResponse, FloorPlan } from "./geometry/types";
 
-const BASE = "http://localhost:8000";
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 /** Upload an image file; returns the initial FloorPlan. */
 export async function analyzeImage(
