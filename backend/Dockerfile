@@ -2,10 +2,9 @@ FROM python:3.10-slim
 
 # System packages:
 #   poppler-utils  → pdftocairo + pdftotext (Metaroom PDF parsing)
-#   libgl1 / libglib2.0-0 → OpenCV headless runtime
+#   libglib2.0-0   → required by opencv-python-headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
         poppler-utils \
-        libgl1 \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
