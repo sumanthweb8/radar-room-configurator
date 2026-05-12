@@ -41,7 +41,7 @@ app = FastAPI(title="Floor Plan Analyzer", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -258,26 +258,26 @@ async def import_metaroom(file: UploadFile = File(...)):
         import traceback
         raise HTTPException(status_code=500, detail=f"Metaroom parse error: {exc}\n{traceback.format_exc()}")
 
-    # Convert to list of rooms in the frontend's expected shape
-    rooms = []
-    for room in report.rooms:
-        rooms.append({
-            "room": {"name": room.name, "width": round(room.width, 3), "height": round(room.height, 3)},
-            "objects": [
-                {
-                    "type":     obj.type,
-                    "label":    obj.label,
-                    "x":        round(obj.x, 3),
-                    "y":        round(obj.y, 3),
-                    "width":    round(obj.width, 3),
-                    "height":   round(obj.height, 3),
-                    "rotation": obj.rotation,
-                }
-                for obj in room.objects
-            ],
-        })
-
-    return {"rooms": rooms, "floor": report.floor.__dict__ if report.floor else None}
+    return {
+        "floor": (
+            {"name": report.floor.name, "width": report.floor.width, "height": report.floor.height}
+            if report.floor else None
+        ),
+        "rooms": [
+            {
+                "room": {"name": r.name, "width": round(r.width, 3), "height": round(r.height, 3)},
+                "objects": [
+                    {
+                        "type": o.type,
+                        "label": o.label,
+                        "x": o.x, "y": o.y,
+                        "width": o.width, "height": o.height,
+                        "rotation": o.rotation,
+                    } for o in r.objects
+                ],
+            } for r in report.rooms
+        ],
+    }
 
 
 # ─── refine ──────────────────────────────────────────────────────────────────
