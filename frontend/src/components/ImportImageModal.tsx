@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { importMetaroom, type MetaroomImportResponse } from '../api';
+import { importDxf, importMetaroom, type MetaroomImportResponse } from '../api';
 
 interface Props {
   dark: boolean;
@@ -63,6 +63,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
   }
 
   const isPdf = !!file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+  const isDxf = !!file && /\.dxf$/i.test(file.name);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -70,6 +71,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
     const f = e.dataTransfer.files[0];
     if (!f) return;
     if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name) ||
+        /\.dxf$/i.test(f.name) ||
         f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name)) {
       pickFile(f);
     }
@@ -80,7 +82,14 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
     setLoading(true);
     setError(null);
     try {
-      if (isPdf) {
+      if (isDxf) {
+        if (!onImportMetaroom) throw new Error('DXF import not wired');
+        const payload = await importDxf(file);
+        if (!payload.rooms || payload.rooms.length === 0) {
+          throw new Error('No rooms detected in this DXF');
+        }
+        onImportMetaroom(payload);
+      } else if (isPdf) {
         if (!onImportMetaroom) throw new Error('PDF import not wired');
         const payload = await importMetaroom(file);
         if (!payload.rooms || payload.rooms.length === 0) {
@@ -135,8 +144,14 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
             height: preview ? 'auto' : 130, cursor: 'pointer', transition: 'all 0.15s', overflow: 'hidden',
           }}
         >
-          {preview && !isPdf ? (
+          {preview && !isPdf && !isDxf ? (
             <img src={preview} alt="preview" style={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} />
+          ) : isDxf ? (
+            <>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>📐</div>
+              <p style={{ fontSize: 13, fontWeight: 500, color: textMd, margin: 0 }}>{file?.name}</p>
+              <p style={{ fontSize: 11, color: textSm, margin: '3px 0 0' }}>DXF — walls and openings will be extracted</p>
+            </>
           ) : isPdf ? (
             <>
               <div style={{ fontSize: 28, marginBottom: 6 }}>📄</div>
@@ -146,11 +161,11 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
           ) : (
             <>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🖼</div>
-              <p style={{ fontSize: 13, fontWeight: 500, color: textMd, margin: 0 }}>Click or drag image / PDF here</p>
-              <p style={{ fontSize: 11, color: textSm, margin: '3px 0 0' }}>PNG · JPG · WEBP · HEIC · Metaroom PDF</p>
+              <p style={{ fontSize: 13, fontWeight: 500, color: textMd, margin: 0 }}>Click or drag image / PDF / DXF here</p>
+              <p style={{ fontSize: 11, color: textSm, margin: '3px 0 0' }}>PNG · JPG · WEBP · HEIC · Metaroom PDF · DXF</p>
             </>
           )}
-          <input ref={inputRef} type="file" accept="image/*,.heic,.heif,application/pdf,.pdf" style={{ display: 'none' }}
+          <input ref={inputRef} type="file" accept="image/*,.heic,.heif,application/pdf,.pdf,.dxf" style={{ display: 'none' }}
             onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
         </div>
 
@@ -173,7 +188,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
         {loading && (
           <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #6366f1', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>{isPdf ? 'Parsing Metaroom PDF…' : 'Claude is reading your floor plan…'}</p>
+            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>{isDxf ? 'Parsing DXF…' : isPdf ? 'Parsing Metaroom PDF…' : 'Claude is reading your floor plan…'}</p>
           </div>
         )}
 
@@ -191,7 +206,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onImportMeta
               fontSize: 12, fontWeight: 700, cursor: (!file || loading) ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit', transition: 'all 0.15s',
             }}>
-            {loading ? 'Extracting…' : isPdf ? '📐 Parse PDF & Import' : '✦ Extract & Import'}
+            {loading ? 'Extracting…' : isDxf ? '📐 Parse DXF & Import' : isPdf ? '📐 Parse PDF & Import' : '✦ Extract & Import'}
           </button>
         </div>
 

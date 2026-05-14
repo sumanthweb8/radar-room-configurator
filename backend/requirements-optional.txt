@@ -1,3 +1,0 @@
-# Optional heavy deps. Skip these unless you actually use /api/analyze's
-# OCR dimension reader — installing easyocr pulls torch + ~4 GB of CUDA wheels.
-easyocr>=1.7

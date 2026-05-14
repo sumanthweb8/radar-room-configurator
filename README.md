@@ -1,6 +1,6 @@
 # Floor Plan → 3D
 
-Internal tool: upload a floor plan image → get a correctable 2D wall model → render in 3D.
+Internal tool: upload a floor plan → get a correctable 2D wall model → render in 3D.
 
 ---
 
@@ -9,18 +9,15 @@ Internal tool: upload a floor plan image → get a correctable 2D wall model →
 ```
 floor-plan-tool/
 ├── backend/
-│   ├── detection.py           # Layer 1 — OpenCV pipeline
-│   ├── ocr.py                 # EasyOCR text extraction
-│   ├── dimension_matcher.py   # Match OCR dimensions to walls
-│   ├── geometry.py            # Layer 2 — Geometry engine (core)
-│   ├── models.py              # Pydantic data models
-│   ├── main.py                # FastAPI server
+│   ├── main.py                # FastAPI server (3 importer endpoints)
+│   ├── metaroom.py            # Metaroom-by-Amrax PDF parser + single-page fallback
+│   ├── dxf.py                 # Shonan-style ASCII DXF parser
+│   ├── tests/                 # pytest suite (skips when sample data is absent)
 │   └── requirements.txt
 └── frontend/
     └── src/
         ├── App.tsx                     # Root — upload / 2D / 3D views
         ├── api.ts                      # Typed fetch wrappers
-        ├── geometry/types.ts           # Shared TS types
         └── components/
             ├── RoomEditor.tsx          # SVG interactive 2D editor
             ├── Room3DViewer.tsx        # Three.js renderer
@@ -36,7 +33,7 @@ floor-plan-tool/
 
 ### System prerequisites
 
-`poppler-utils` must be available on `$PATH` — the backend shells out to `pdftotext` and `pdftocairo` for the Metaroom PDF importer.
+`poppler-utils` must be available on `$PATH` — the Metaroom PDF importer shells out to `pdftotext` and `pdftocairo`.
 
 ```bash
 # Debian/Ubuntu
@@ -52,13 +49,13 @@ Use `python3` — Ubuntu 22.04+ doesn't alias `python` by default. If `python3 -
 ```bash
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # core deps only
-# (Optional, only if you need /api/analyze OCR — pulls ~4 GB of torch+CUDA)
-# pip install -r requirements-optional.txt
+pip install -r requirements.txt
 python3 main.py                            # → http://localhost:8000
 ```
 
 Always activate the venv before installing. Without `source .venv/bin/activate`, pip falls back to `~/.local/lib/python3.x/site-packages`, which leaks dependency pins into your other Python projects (you'll see "Defaulting to user installation because normal site-packages is not writeable" — that's the warning sign).
+
+A `.env` file in `backend/` with `ANTHROPIC_API_KEY=…` is required for the raster-image importer (`/api/import-image`). The PDF and DXF importers run offline.
 
 ### Frontend
 
@@ -68,48 +65,37 @@ npm install
 npm run dev             # → http://localhost:5173
 ```
 
-Open http://localhost:5173 and drop a floor-plan image or a Metaroom PDF onto the page. A house can hold any number of rooms — each one carries its own `board` + `location` and is exported as a separate `<board>_config.json` from the **Export** button (active room) or **Export All** (every room with a placed radar). House state persists to localStorage automatically.
+Open http://localhost:5173 and drop a floor-plan image, a Metaroom PDF, or a DXF onto the page. A house can hold any number of rooms — each one carries its own `board` + `location` and is exported as a separate `<board>_config.json` from the **Export** button (active room) or **Export All** (every room with a placed radar). House state persists to localStorage automatically.
 
 ## Importers
 
-| Endpoint | Input | Notes |
-|---|---|---|
-| `POST /api/analyze` | image | OpenCV + EasyOCR pipeline for hand-drawn sketches |
-| `POST /api/import-image` | image | Claude vision — needs `ANTHROPIC_API_KEY` in `backend/.env` |
-| `POST /api/import-metaroom` | PDF | Deterministic Metaroom-by-Amrax parser, no external API |
-| `POST /api/refine` | JSON FloorPlan | Re-runs room detection on edited geometry |
+| Endpoint | Input | Backend file | Notes |
+|---|---|---|---|
+| `POST /api/import-image` | image (PNG/JPG/WEBP/HEIC) | `main.py` | Claude vision — needs `ANTHROPIC_API_KEY` in `backend/.env` |
+| `POST /api/import-metaroom` | PDF | `metaroom.py` | Multi-page Metaroom LiDAR reports *and* single-page Matplotlib exports |
+| `POST /api/import-dxf` | DXF (ASCII) | `dxf.py` | Shonan-style exports: walls + door/window openings, furniture ignored |
 
----
+All three return the same `{ floor, rooms: [{ name, width, height, objects[] }] }` shape so the frontend handler is uniform.
 
-## Geometry engine pipeline (geometry.py)
+### DXF importer details
 
-| Step | What it does | Key config |
-|------|-------------|------------|
-| 1. normalize | Consistent orientation; drop zero-length | — |
-| 2. snap_angles | Rotate to nearest 0°/45°/90°/135° | `angle_snap_threshold` (15°) |
-| 3. filter_short | Drop segments < threshold | `min_segment_length` (20 px) |
-| 4. merge_collinear | Fuse fragments of same wall | `collinear_distance_threshold` (6 px) |
-| 5. merge_parallel | Collapse double-line thick walls | `parallel_merge_distance` (12 px) |
-| 6. snap_to_grid | Quantise endpoints | `grid_size` (5 px) |
-| 7. compute_intersections | Parametric segment–segment | — |
-| 8. snap_intersections | Union-find cluster → centroid | `intersection_snap_distance` (8 px) |
-| 9. split_at_intersections | Cut segments at T/X junctions | — |
-| 10. build_graph | Adjacency list for rooms | — |
-| 11. detect_rooms | Shapely polygonize (DFS fallback) | `min_room_area_px2` (2000) |
+The DXF parser ([`backend/dxf.py`](backend/dxf.py)) expects the Shonan export-tool layer convention:
 
-All constants are in `GeometryConfig` — pass overrides via the `/api/analyze` form fields.
+| Layer | What we extract |
+|---|---|
+| `Geometry` | Largest-area `LWPOLYLINE` = inner room perimeter → room width × height |
+| `Other` | `LWPOLYLINE` openings → `door` / `window` objects (typed by nearest `Other Annotation` TEXT) |
+| `Assets` | **Ignored** — furniture rectangles would otherwise be detected as phantom rooms |
+| `Measurement` | Not used (room dimensions already come from the perimeter polyline) |
 
----
+Coordinates are read in metres (`$INSUNITS = 6`). Near-coincident opening polylines are deduped (the exporter draws each opening as inner + outer face). Only ASCII DXF is supported; binary DXF will be rejected with `415`.
 
-## API
+### Metaroom PDF importer details
 
-### POST /api/analyze
-- Body: `multipart/form-data` — `file` (image) + optional config overrides
-- Response: `{ floor_plan: FloorPlan, debug_image?: string }`
+Two formats are supported:
 
-### POST /api/refine
-- Body: JSON `FloorPlan` (after user edits)
-- Response: updated `FloorPlan` with re-computed rooms
+- **Multi-page Metaroom-by-Amrax LiDAR reports** — every room has a "Room Layout" page (vector floor plan) and a "Room Layout Overview" page (element table). Walls, doors, windows, and fixtures (bed, sofa, toilet, sink, …) are extracted from the rendered SVG + table.
+- **Single-page Matplotlib exports** (e.g. Shonan-tool build 1.3.3) — only the room name and dimensions are extracted from the page title and `Dimensions: X m x Y m` line. Objects are not extracted (the SVG mixes glyph paths with the floor geometry and there is no reliable colour convention).
 
 ---
 
@@ -133,3 +119,14 @@ All constants are in `GeometryConfig` — pass overrides via the `/api/analyze` 
 - Walls extruded to **3 m** height.
 - Scale: `1 / floorPlan.scale` converts pixels → metres (set via 2D scale tool).
 - Orbit: left-drag to rotate, right-drag to pan, scroll to zoom.
+
+---
+
+## Tests
+
+```bash
+cd backend && source .venv/bin/activate
+python3 -m pytest tests/ -v
+```
+
+PDF-importer tests need samples in `fwdfloorplans/`, DXF-importer tests need samples in `shonan/`. Both directories are gitignored — tests skip cleanly when samples are absent.

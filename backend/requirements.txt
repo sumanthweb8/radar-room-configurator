@@ -1,4 +1,4 @@
-# Core deps for the FastAPI server + Metaroom PDF importer.
+# Core deps for the FastAPI server + the three importers.
 # Pins are loose ranges so this file co-exists with other Python projects
 # in the same env (e.g. feast) — pin tighter only if you hit a regression.
 anthropic>=0.94
@@ -9,15 +9,9 @@ pydantic>=2.7
 pillow-heif>=0.16
 Pillow>=10.3
 python-dotenv>=1.0
+
+# Metaroom PDF importer
 pypdf>=4
 
-# Used by the legacy OpenCV sketch-detection pipeline (/api/analyze).
-# Modest in size; safe to keep even if you only use the Metaroom path.
-opencv-python>=4.9,<4.13
-numpy>=1.26,<2
-shapely>=2.0
-
-# Heavy optional deps (~4 GB with CUDA) live in requirements-optional.txt:
-#   easyocr       — only needed for /api/analyze's OCR dimension reader.
-# Install with:
-#   pip install -r requirements-optional.txt
+# DXF importer (also brings numpy as a transitive dep)
+ezdxf>=1.3

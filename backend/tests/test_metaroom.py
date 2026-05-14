@@ -17,6 +17,11 @@ from metaroom import is_metaroom_pdf, parse_metaroom_pdf
 SAMPLES_DIR = Path(__file__).parent.parent.parent / "fwdfloorplans"
 LAB_PDF = SAMPLES_DIR / "Lab_layout_floor plan" / "lab-layout.pdf"
 UTSAV_PDF = SAMPLES_DIR / "2151dde8-b4e1-4a66-a7c1-5bf19586efe7.pdf"
+SHONAN_PDF = (
+    Path(__file__).parent.parent.parent
+    / "shonan"
+    / "6Room_304_shonan_daiichi_hospital_japan_geo only_pdf.pdf"
+)
 
 
 def _read(path: Path) -> bytes:
@@ -76,6 +81,24 @@ def test_parse_utsav_room_006_dimensions_and_elements():
     labels = {o.label for o in room.objects}
     assert "Toilet" in labels
     assert "Sink" in labels
+
+
+@pytest.mark.skipif(not SHONAN_PDF.exists(), reason="Shonan single-page PDF missing")
+def test_single_page_matplotlib_fallback_parses_dimensions():
+    """
+    Shonan PDFs are single-page Matplotlib exports that forge Author=Metaroom
+    but lack the multi-page 'Room Layout:' headers. The single-page fallback
+    must return one Room with the dimensions from the page-title block.
+    """
+    report = parse_metaroom_pdf(SHONAN_PDF.read_bytes())
+    assert report.floor is None
+    assert len(report.rooms) == 1
+    r = report.rooms[0]
+    assert r.width == pytest.approx(2.79, abs=0.01)
+    assert r.height == pytest.approx(4.90, abs=0.01)
+    assert r.name.startswith("Room 304")
+    # No object extraction on this path — user adds them manually.
+    assert r.objects == []
 
 
 @pytest.mark.skipif(not UTSAV_PDF.exists(), reason="Utsav sample missing")

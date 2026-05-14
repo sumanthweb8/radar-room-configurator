@@ -123,6 +123,12 @@ def parse_metaroom_pdf(pdf_bytes: bytes) -> MetaroomReport:
 
         floor = _parse_floor_info(full_text)
         room_pages = _find_room_pages(page_texts)
+
+        if not room_pages:
+            single = _parse_single_page_report(full_text)
+            if single is not None:
+                return MetaroomReport(floor=None, rooms=[single])
+
         rooms: List[Room] = []
         for header_page, overview_page, name, w, h in room_pages:
             elements = _parse_overview_table(page_texts[overview_page - 1]) if overview_page else []
@@ -130,6 +136,24 @@ def parse_metaroom_pdf(pdf_bytes: bytes) -> MetaroomReport:
             objects = _objects_from_svg(svg_root, w, h, elements)
             rooms.append(Room(name=name, width=w, height=h, objects=objects))
         return MetaroomReport(floor=floor, rooms=rooms)
+
+
+def _parse_single_page_report(full_text: str) -> Optional[Room]:
+    """
+    Single-page Matplotlib export fallback (Shonan tool build 1.3.3).
+
+    The page contains exactly one `<name> | Floor N, Plan Scale 1:N` title and
+    one `Dimensions: X m x Y m, …` line. Object extraction is skipped — the
+    Matplotlib SVG mixes glyph paths with the floor geometry and there is no
+    colour convention reliable enough to separate them. The user gets a
+    correctly-sized empty room they can populate manually.
+    """
+    title = _SINGLE_PAGE_TITLE_RE.search(full_text)
+    dim = _DIM_RE.search(full_text)
+    if not title or not dim:
+        return None
+    name = title.group("name").strip()
+    return Room(name=name, width=float(dim.group(1)), height=float(dim.group(2)), objects=[])
 
 
 # ───────────────────────── poppler wrappers ──────────────────────────
@@ -171,6 +195,13 @@ _DIM_RE = re.compile(
 _FLOOR_HEADER_RE = re.compile(r"^\s*Floor\s+(\d+)\s*$", re.MULTILINE)
 _ROOM_HEADER_RE = re.compile(r"^\s*Room Layout:\s*(.+?)\s*$", re.MULTILINE)
 _ROOM_OVERVIEW_HEADER_RE = re.compile(r"^\s*Room Layout Overview:\s*(.+?)\s*$", re.MULTILINE)
+# Single-page Matplotlib export (e.g. Shonan tool build 1.3.3): the title is
+# `<room name> | Floor N, Plan Scale 1:N` and there is no per-room overview
+# table. The name can contain spaces and pipes are forbidden inside it.
+_SINGLE_PAGE_TITLE_RE = re.compile(
+    r"^\s*(?P<name>[^|\n]+?)\s*\|\s*Floor\s+\d+,\s*Plan Scale\s+1:\d+\s*$",
+    re.MULTILINE,
+)
 # Matches table rows like:  "  3          Wall           2.26 m x 0.11 m x 2.59 m   ..."
 # Capture group 2 is everything between the row number and the dimensions; we
 # resolve the actual element type from that span via _extract_type_from_label.

@@ -1,41 +1,28 @@
 """
 main.py — FastAPI server.
 
-Full pipeline for hand-drawn annotated sketches
-------------------------------------------------
-1. OpenCV (detection.py)         → raw wall segments (topology)
-2. Geometry engine (geometry.py) → clean walls + rooms
-3. EasyOCR (ocr.py)              → dimension annotations ("4m", "1m", …)
-4. Dimension matcher             → associate annotations → walls, compute scale
-
-The resulting FloorPlan has:
-  • walls with label_m / label_text where OCR matched
-  • scale set to pixels-per-metre derived from the annotations
-  • ocr_found / ocr_matched counters shown in the UI
+Three importers feed the floor-plan editor:
+  • POST /api/import-image     → Claude vision (raster floor plans)
+  • POST /api/import-metaroom  → Metaroom-by-Amrax LiDAR PDFs + single-page
+                                  Matplotlib exports
+  • POST /api/import-dxf       → Shonan-style ASCII DXF (walls + openings)
 """
 
 import base64
 import json
 import os
 import re
-import tempfile
-import uuid
-from typing import Optional
 
 import anthropic
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
 # Load .env from the backend directory
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from fastapi.middleware.cors import CORSMiddleware
 
-from detection import DetectionConfig, detect_walls, get_image_dimensions, hand_drawn_config
-from dimension_matcher import match_dimensions
-from geometry import GeometryConfig, GeometryEngine, hand_drawn_geo_config
-from metaroom import is_metaroom_pdf, parse_metaroom_pdf
-from models import AnalyzeResponse, FloorPlan, Room, Wall
-from ocr import read_dimensions
+from dxf import is_dxf, parse_dxf
+from metaroom import MetaroomReport, is_metaroom_pdf, parse_metaroom_pdf
 
 app = FastAPI(title="Floor Plan Analyzer", version="1.0.0")
 
@@ -53,84 +40,6 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
-
-
-# ─── analyze ─────────────────────────────────────────────────────────────────
-
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze(
-    file:        UploadFile = File(...),
-    debug:       bool       = Form(False),
-    hand_drawn:  bool       = Form(True),   # default ON for sketch workflow
-    use_ocr:     bool       = Form(True),   # default ON — read dimension numbers
-    # Detection overrides
-    hough_threshold:  Optional[int]   = Form(None),
-    hough_min_length: Optional[int]   = Form(None),
-    hough_max_gap:    Optional[int]   = Form(None),
-    # Geometry overrides
-    angle_snap_threshold:    Optional[float] = Form(None),
-    parallel_merge_distance: Optional[float] = Form(None),
-    min_segment_length:      Optional[float] = Form(None),
-    grid_size:               Optional[float] = Form(None),
-):
-    suffix   = os.path.splitext(file.filename or "image.png")[1] or ".png"
-    tmp_path = os.path.join(tempfile.gettempdir(), f"fp_{uuid.uuid4().hex}{suffix}")
-
-    try:
-        content = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-
-        # ── 1. Detection config ───────────────────────────────────────────
-        det_cfg = hand_drawn_config() if hand_drawn else DetectionConfig()
-        if hough_threshold  is not None: det_cfg.hough_threshold  = hough_threshold
-        if hough_min_length is not None: det_cfg.hough_min_length = hough_min_length
-        if hough_max_gap    is not None: det_cfg.hough_max_gap    = hough_max_gap
-
-        # ── 2. Geometry config ────────────────────────────────────────────
-        geo_cfg = hand_drawn_geo_config() if hand_drawn else GeometryConfig()
-        if angle_snap_threshold    is not None: geo_cfg.angle_snap_threshold    = angle_snap_threshold
-        if parallel_merge_distance is not None: geo_cfg.parallel_merge_distance = parallel_merge_distance
-        if min_segment_length      is not None: geo_cfg.min_segment_length      = min_segment_length
-        if grid_size               is not None: geo_cfg.grid_size               = grid_size
-
-        # ── 3. Run OpenCV detection ───────────────────────────────────────
-        raw_segs, debug_b64 = detect_walls(tmp_path, det_cfg, produce_debug_image=debug)
-        img_w, img_h = get_image_dimensions(tmp_path)
-
-        # ── 4. Run geometry engine ────────────────────────────────────────
-        engine     = GeometryEngine(geo_cfg)
-        floor_plan = engine.process(raw_segs, image_width=img_w, image_height=img_h)
-
-        # ── 5. OCR: read dimension numbers ────────────────────────────────
-        if use_ocr:
-            annotations = read_dimensions(tmp_path, min_confidence=0.25)
-            floor_plan.ocr_found = len(annotations)
-
-            if annotations:
-                floor_plan, wall_dims = match_dimensions(
-                    floor_plan, annotations, img_w, img_h
-                )
-                floor_plan.ocr_matched = len(wall_dims)
-
-                # Stamp matched labels onto individual Wall objects
-                dim_by_id = {d.wall_id: d for d in wall_dims}
-                for wall in floor_plan.walls:
-                    d = dim_by_id.get(wall.id)
-                    if d:
-                        wall.label_m    = d.value_m
-                        wall.label_text = d.raw_text
-
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"Processing error: {exc}\n{traceback.format_exc()}")
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    return AnalyzeResponse(floor_plan=floor_plan, debug_image=debug_b64)
 
 
 # ─── import-image ────────────────────────────────────────────────────────────
@@ -226,18 +135,7 @@ async def import_image(file: UploadFile = File(...)):
 
 # ─── import-metaroom ─────────────────────────────────────────────────────────
 
-@app.post("/api/import-metaroom")
-async def import_metaroom(file: UploadFile = File(...)):
-    """Parse a Metaroom (Amrax) iPhone-LiDAR PDF into rooms with placed objects."""
-    pdf_bytes = await file.read()
-    if not is_metaroom_pdf(pdf_bytes):
-        raise HTTPException(status_code=415, detail="Not a Metaroom PDF (no Metaroom signature found)")
-    try:
-        report = parse_metaroom_pdf(pdf_bytes)
-    except Exception as exc:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"Metaroom parse error: {exc}\n{traceback.format_exc()}")
-
+def _report_to_response(report: MetaroomReport) -> dict:
     return {
         "floor": (
             {"name": report.floor.name, "width": report.floor.width, "height": report.floor.height}
@@ -262,23 +160,36 @@ async def import_metaroom(file: UploadFile = File(...)):
     }
 
 
-# ─── refine ──────────────────────────────────────────────────────────────────
-
-@app.post("/api/refine", response_model=FloorPlan)
-async def refine(floor_plan: FloorPlan):
-    """Re-run room detection only on an edited floor plan."""
+@app.post("/api/import-metaroom")
+async def import_metaroom(file: UploadFile = File(...)):
+    """Parse a Metaroom (Amrax) iPhone-LiDAR PDF into rooms with placed objects."""
+    pdf_bytes = await file.read()
+    if not is_metaroom_pdf(pdf_bytes):
+        raise HTTPException(status_code=415, detail="Not a Metaroom PDF (no Metaroom signature found)")
     try:
-        engine = GeometryEngine()
-        segs   = [(float(w.start[0]), float(w.start[1]), float(w.end[0]), float(w.end[1]))
-                  for w in floor_plan.walls]
-        room_polygons = engine._detect_rooms(segs)
-        floor_plan.rooms = [
-            Room(id=str(uuid.uuid4())[:8], polygon=[[x, y] for x, y in poly])
-            for poly in room_polygons
-        ]
+        report = parse_metaroom_pdf(pdf_bytes)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Refine error: {exc}")
-    return floor_plan
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Metaroom parse error: {exc}\n{traceback.format_exc()}")
+
+    return _report_to_response(report)
+
+
+# ─── import-dxf ──────────────────────────────────────────────────────────────
+
+@app.post("/api/import-dxf")
+async def import_dxf(file: UploadFile = File(...)):
+    """Parse a Shonan-style ASCII DXF into rooms with door/window openings."""
+    dxf_bytes = await file.read()
+    if not is_dxf(dxf_bytes):
+        raise HTTPException(status_code=415, detail="Not an ASCII DXF file")
+    try:
+        report = parse_dxf(dxf_bytes)
+    except Exception as exc:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"DXF parse error: {exc}\n{traceback.format_exc()}")
+
+    return _report_to_response(report)
 
 
 # ─── entry point ─────────────────────────────────────────────────────────────
