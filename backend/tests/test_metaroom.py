@@ -17,11 +17,9 @@ from metaroom import is_metaroom_pdf, parse_metaroom_pdf
 SAMPLES_DIR = Path(__file__).parent.parent.parent / "fwdfloorplans"
 LAB_PDF = SAMPLES_DIR / "Lab_layout_floor plan" / "lab-layout.pdf"
 UTSAV_PDF = SAMPLES_DIR / "2151dde8-b4e1-4a66-a7c1-5bf19586efe7.pdf"
-SHONAN_PDF = (
-    Path(__file__).parent.parent.parent
-    / "shonan"
-    / "6Room_304_shonan_daiichi_hospital_japan_geo only_pdf.pdf"
-)
+SHONAN_DIR     = Path(__file__).parent.parent.parent / "shonan"
+SHONAN_PDF     = SHONAN_DIR / "6Room_304_shonan_daiichi_hospital_japan_geo only_pdf.pdf"
+SHONAN_PDF_COMPLETE = SHONAN_DIR / "2Room_304_shonan_daiichi_hospital_japan_complete_pdf.pdf"
 
 
 def _read(path: Path) -> bytes:
@@ -84,11 +82,11 @@ def test_parse_utsav_room_006_dimensions_and_elements():
 
 
 @pytest.mark.skipif(not SHONAN_PDF.exists(), reason="Shonan single-page PDF missing")
-def test_single_page_matplotlib_fallback_parses_dimensions():
+def test_single_page_matplotlib_geo_only_extracts_window():
     """
-    Shonan PDFs are single-page Matplotlib exports that forge Author=Metaroom
-    but lack the multi-page 'Room Layout:' headers. The single-page fallback
-    must return one Room with the dimensions from the page-title block.
+    The 'geo only' / 'custom objects' PDF variants render only walls + the
+    window cut-out. After SVG colour-keying we should get exactly one
+    window object — same geometry as the sibling DXF file 5.
     """
     report = parse_metaroom_pdf(SHONAN_PDF.read_bytes())
     assert report.floor is None
@@ -97,8 +95,42 @@ def test_single_page_matplotlib_fallback_parses_dimensions():
     assert r.width == pytest.approx(2.79, abs=0.01)
     assert r.height == pytest.approx(4.90, abs=0.01)
     assert r.name.startswith("Room 304")
-    # No object extraction on this path — user adds them manually.
-    assert r.objects == []
+    assert len(r.objects) == 1
+    win = r.objects[0]
+    assert win.type == "window"
+    assert win.y == pytest.approx(0.0, abs=0.05)
+    assert win.width == pytest.approx(1.425, abs=0.05)
+
+
+@pytest.mark.skipif(not SHONAN_PDF_COMPLETE.exists(),
+                    reason="Shonan 'complete' PDF missing")
+def test_single_page_matplotlib_complete_extracts_window_and_furniture():
+    """
+    The 'complete' PDF (file 2) is Matplotlib's render of file-1 DXF, so it
+    must surface the same 1 window + 6 furniture rectangles. Labels can't
+    be recovered from the SVG (text is rendered as glyph paths), so all
+    furniture comes through as type='custom' with generic 'Furniture N'
+    labels — geometry must match the DXF to within a few millimetres.
+    """
+    report = parse_metaroom_pdf(SHONAN_PDF_COMPLETE.read_bytes())
+    r = report.rooms[0]
+    assert r.width == pytest.approx(2.79, abs=0.01)
+    assert r.height == pytest.approx(4.90, abs=0.01)
+    assert len(r.objects) == 1 + 6
+
+    by_type: dict = {}
+    for o in r.objects:
+        by_type.setdefault(o.type, []).append(o)
+    assert len(by_type["window"]) == 1
+    assert len(by_type["custom"]) == 6
+
+    # Bed (largest furniture rectangle) must land at the same position as
+    # the DXF parser places it: x=0.0, y≈0.143, size ≈2.18×1.33 m.
+    bed = max(by_type["custom"], key=lambda o: o.width * o.height)
+    assert bed.x == pytest.approx(0.0,   abs=0.02)
+    assert bed.y == pytest.approx(0.143, abs=0.02)
+    assert bed.width  == pytest.approx(2.178, abs=0.02)
+    assert bed.height == pytest.approx(1.330, abs=0.02)
 
 
 @pytest.mark.skipif(not UTSAV_PDF.exists(), reason="Utsav sample missing")

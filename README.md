@@ -95,8 +95,8 @@ Furniture extraction only fires when the source DXF carries an `Assets` layer �
 
 Two formats are supported:
 
-- **Multi-page Metaroom-by-Amrax LiDAR reports** — every room has a "Room Layout" page (vector floor plan) and a "Room Layout Overview" page (element table). Walls, doors, windows, and fixtures (bed, sofa, toilet, sink, …) are extracted from the rendered SVG + table.
-- **Single-page Matplotlib exports** (e.g. Shonan-tool build 1.3.3) — only the room name and dimensions are extracted from the page title and `Dimensions: X m x Y m` line. Objects are not extracted (the SVG mixes glyph paths with the floor geometry and there is no reliable colour convention).
+- **Multi-page Metaroom-by-Amrax LiDAR reports** — every room has a "Room Layout" page (vector floor plan) and a "Room Layout Overview" page (element table). Walls, doors, windows, and fixtures (bed, sofa, toilet, sink, …) are extracted from the rendered SVG + table — labels are read from the per-room element table.
+- **Single-page Matplotlib exports** (e.g. Shonan-tool build 1.3.3) — title and dimensions come from the text layer; the room outline, window cut-outs (sky-blue colour-key), and interior furniture rectangles are extracted from the rendered SVG. **Furniture labels are not recoverable** in this variant — Matplotlib renders text as glyph paths rather than as readable text, so each piece of furniture comes through as `type=custom, label="Furniture N"`. Use the sibling DXF when labelled furniture matters.
 
 ---
 

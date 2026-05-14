@@ -125,7 +125,7 @@ def parse_metaroom_pdf(pdf_bytes: bytes) -> MetaroomReport:
         room_pages = _find_room_pages(page_texts)
 
         if not room_pages:
-            single = _parse_single_page_report(full_text)
+            single = _parse_single_page_report(full_text, pdf_path, tmpdir)
             if single is not None:
                 return MetaroomReport(floor=None, rooms=[single])
 
@@ -138,22 +138,164 @@ def parse_metaroom_pdf(pdf_bytes: bytes) -> MetaroomReport:
         return MetaroomReport(floor=floor, rooms=rooms)
 
 
-def _parse_single_page_report(full_text: str) -> Optional[Room]:
+def _parse_single_page_report(full_text: str, pdf_path: str, tmpdir: str) -> Optional[Room]:
     """
     Single-page Matplotlib export fallback (Shonan tool build 1.3.3).
 
     The page contains exactly one `<name> | Floor N, Plan Scale 1:N` title and
-    one `Dimensions: X m x Y m, …` line. Object extraction is skipped — the
-    Matplotlib SVG mixes glyph paths with the floor geometry and there is no
-    colour convention reliable enough to separate them. The user gets a
-    correctly-sized empty room they can populate manually.
+    one `Dimensions: X m x Y m, …` line. Object geometry IS extracted from the
+    rendered SVG (room outline + window-by-colour + interior rectangles) but
+    furniture labels are NOT available — Matplotlib renders text as glyph
+    paths, not as readable text in the SVG, so we emit each furniture
+    rectangle as a generic 'custom' object named "Furniture N" and rely on
+    the user to rename via the editor. Use the sibling DXF for labelled
+    furniture when available — that path is in [[backend-dxf-importer]].
     """
     title = _SINGLE_PAGE_TITLE_RE.search(full_text)
     dim = _DIM_RE.search(full_text)
     if not title or not dim:
         return None
     name = title.group("name").strip()
-    return Room(name=name, width=float(dim.group(1)), height=float(dim.group(2)), objects=[])
+    room_w_m, room_h_m = float(dim.group(1)), float(dim.group(2))
+
+    try:
+        svg_root = _pdftocairo_svg(pdf_path, page=1, tmpdir=tmpdir)
+    except Exception:
+        # If SVG conversion fails, still return the dimensions-only room
+        # rather than failing the entire import.
+        return Room(name=name, width=room_w_m, height=room_h_m, objects=[])
+
+    objects = _objects_from_single_page_svg(svg_root, room_w_m, room_h_m)
+    return Room(name=name, width=room_w_m, height=room_h_m, objects=objects)
+
+
+# ───────────────────────── single-page SVG geometry ──────────────────────────
+
+# Colour conventions in the Matplotlib-rendered SVG. Identical to the LiDAR
+# report convention for windows; doors aren't drawn in colour in this export
+# (the source DXF puts them on the 'Other' layer with a 'Door area' label,
+# but Matplotlib renders them in plain black). We only colour-key the window.
+_SP_WIN_BLUE = (0.678421, 0.847046, 0.901947)
+# Stroke widths that distinguish structural paths from text glyphs.
+_SP_ROOM_STROKE_WIDTHS = (0.25,)   # room outline + main wall segments
+_SP_OBJECT_STROKE_WIDTHS = (0.13,) # furniture rectangles
+# Minimum dimension (in metres) for a rectangle to count as furniture rather
+# than a tick mark, dimension extension line, or text glyph artifact.
+_SP_MIN_FURNITURE_DIM_M = 0.30
+
+
+def _objects_from_single_page_svg(
+    svg_root: ET.Element, room_w_m: float, room_h_m: float,
+) -> List[RoomObject]:
+    """Extract window + furniture rectangles from the Matplotlib-rendered SVG."""
+    candidates: List[Tuple[Tuple[float, float, float, float], dict]] = []
+    defs_ids: set = set()
+    defs_el = svg_root.find(f"{{{SVG_NS['svg']}}}defs")
+    if defs_el is not None:
+        defs_ids = {id(p) for p in defs_el.iter(f"{{{SVG_NS['svg']}}}path")}
+
+    for path in svg_root.iter(f"{{{SVG_NS['svg']}}}path"):
+        if id(path) in defs_ids:
+            continue  # text glyph defs — skipped
+        bbox = _path_bbox(path.get("d", ""))
+        if bbox is None:
+            continue
+        if (bbox[2] - bbox[0]) < 1.0 or (bbox[3] - bbox[1]) < 1.0:
+            continue
+        candidates.append((bbox, _path_style(path)))
+
+    # Step 1: identify the room outline = largest stroke-0.25 black no-fill rect.
+    room_outline: Optional[Tuple[float, float, float, float]] = None
+    room_area = 0.0
+    for bbox, s in candidates:
+        if s["fill"] is not None:
+            continue
+        if not _color_matches(s["stroke"], _BLACK):
+            continue
+        if s["stroke_width"] not in _SP_ROOM_STROKE_WIDTHS:
+            continue
+        area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        if area > room_area:
+            room_area = area
+            room_outline = bbox
+    if room_outline is None:
+        return []
+
+    rx0, ry0, rx1, ry1 = room_outline
+    room_w_pt = rx1 - rx0
+    if room_w_pt <= 0:
+        return []
+    scale = room_w_m / room_w_pt  # metres per SVG point
+
+    # Step 2: window (sky-blue paths). Dedupe near-coincident copies.
+    window_bboxes: List[Tuple[float, float, float, float]] = []
+    for bbox, s in candidates:
+        if _color_matches(s["stroke"], _SP_WIN_BLUE) or _color_matches(s["fill"], _SP_WIN_BLUE):
+            window_bboxes.append(bbox)
+    # Only keep windows whose centre sits within (or against) the room outline.
+    window_bboxes = [
+        b for b in window_bboxes
+        if rx0 - 2 <= (b[0] + b[2]) / 2 <= rx1 + 2
+        and ry0 - 20 <= (b[1] + b[3]) / 2 <= ry1 + 20
+    ]
+    window_bboxes = _dedupe_overlapping(window_bboxes)
+
+    # Step 3: furniture rectangles. Stroke-0.13 black-stroke no-fill rectangles
+    # strictly inside the room outline, with both side lengths ≥ 0.30 m.
+    furniture_bboxes: List[Tuple[float, float, float, float]] = []
+    for bbox, s in candidates:
+        if s["fill"] is not None:
+            continue
+        if not _color_matches(s["stroke"], _BLACK):
+            continue
+        if s["stroke_width"] not in _SP_OBJECT_STROKE_WIDTHS:
+            continue
+        bx0, by0, bx1, by1 = bbox
+        # Skip the room outline itself
+        if abs(bx0 - rx0) < 1 and abs(by0 - ry0) < 1 and abs(bx1 - rx1) < 1 and abs(by1 - ry1) < 1:
+            continue
+        # Must be fully inside the room outline (with a small slack for stroke)
+        if not (bx0 >= rx0 - 1 and by0 >= ry0 - 1 and bx1 <= rx1 + 1 and by1 <= ry1 + 1):
+            continue
+        w_m = (bx1 - bx0) * scale
+        h_m = (by1 - by0) * scale
+        if min(w_m, h_m) < _SP_MIN_FURNITURE_DIM_M:
+            continue
+        furniture_bboxes.append(bbox)
+    furniture_bboxes = _dedupe_overlapping(furniture_bboxes, iou_threshold=0.8)
+
+    # SVG → room-local metric coords. Matplotlib renders the DXF with its
+    # Y axis flipped (DXF Y-up → SVG Y-down), so the DXF's top wall (which
+    # carries the window) ends up at the BOTTOM of the SVG (highest SVG y).
+    # We align editor y=0 with that wall to match the DXF importer, hence:
+    #   editor_y_top = (ry1 − svg_y_max) * scale.
+    def to_room(b: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+        bx0, by0, bx1, by1 = b
+        return (
+            (bx0 - rx0) * scale,
+            (ry1 - by1) * scale,
+            (bx1 - bx0) * scale,
+            (by1 - by0) * scale,
+        )
+
+    objects: List[RoomObject] = []
+    for i, b in enumerate(window_bboxes, start=1):
+        x, y, w, h = to_room(b)
+        objects.append(RoomObject(
+            type="window",
+            label=f"Window {i}" if len(window_bboxes) > 1 else "Window",
+            x=round(max(0.0, x), 3), y=round(max(0.0, y), 3),
+            width=round(w, 3), height=round(h, 3),
+        ))
+    for i, b in enumerate(furniture_bboxes, start=1):
+        x, y, w, h = to_room(b)
+        objects.append(RoomObject(
+            type="custom",
+            label=f"Furniture {i}",
+            x=round(max(0.0, x), 3), y=round(max(0.0, y), 3),
+            width=round(w, 3), height=round(h, 3),
+        ))
+    return objects
 
 
 # ───────────────────────── poppler wrappers ──────────────────────────
