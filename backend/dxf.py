@@ -33,8 +33,29 @@ from metaroom import FloorInfo, MetaroomReport, Room, RoomObject
 # Layers we extract from. Names are case-insensitive against entity.dxf.layer.
 _WALL_LAYERS    = {"geometry"}
 _OPENING_LAYERS = {"other"}
+_ASSET_LAYERS   = {"assets"}
 _LABEL_LAYERS   = {"space annotation"}
 _OPENING_LABEL_LAYERS = {"other annotation"}
+_ASSET_LABEL_LAYERS   = {"assets annotation"}
+
+# Asset-label → frontend ObjectType. Labels not listed here fall through to
+# 'custom' so the rectangle still imports — just with the generic shape.
+_ASSET_TYPE_MAP = {
+    "bed":      "bed",
+    "sofa":     "sofa",
+    "table":    "table",
+    "desk":     "desk",
+    "chair":    "chair",
+    "wardrobe": "wardrobe",
+    "cabinet":  "cabinet",
+    "storage":  "cabinet",
+    "toilet":   "custom",
+    "sink":     "custom",
+    "bathtub":  "custom",
+    "stove":    "custom",
+    "oven":     "custom",
+    "fridge":   "custom",
+}
 
 
 BBox = Tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
@@ -72,8 +93,14 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
 
     name = _extract_room_name(ms) or "Room"
     openings = _collect_openings(ms, wall_bbox)
+    assets = _collect_assets(ms, wall_bbox)
 
-    room = Room(name=name, width=round(room_w_m, 3), height=round(room_h_m, 3), objects=openings)
+    room = Room(
+        name=name,
+        width=round(room_w_m, 3),
+        height=round(room_h_m, 3),
+        objects=openings + assets,
+    )
     return MetaroomReport(floor=None, rooms=[room])
 
 
@@ -246,3 +273,55 @@ def _opening_type_from_label(label: str) -> str:
     if "window" in s:
         return "window"
     return "custom"
+
+
+def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
+    """
+    Walk LWPOLYLINEs on the `Assets` layer (furniture / fixtures in the
+    'complete' DXF variant) and emit one RoomObject per piece.
+
+    Same coordinate convention as openings: room-local, Y flipped to SVG
+    (origin top-left). Each rectangle's type comes from the nearest TEXT
+    on the `Assets Annotation` layer (Bed, Chair, Sink, …) — unknown
+    labels fall through to 'custom' so they still appear in the editor.
+    """
+    rx0, ry0, rx1, ry1 = wall_bbox
+    room_h_m = ry1 - ry0
+
+    annotations: List[Tuple[Tuple[float, float], str]] = []
+    for e in ms:
+        if e.dxftype() != "TEXT":
+            continue
+        if not _layer_matches(e.dxf.layer, _ASSET_LABEL_LAYERS):
+            continue
+        ins = e.dxf.insert
+        annotations.append(((float(ins.x), float(ins.y)), (e.dxf.text or "").strip()))
+
+    objects: List[RoomObject] = []
+    for e in ms:
+        if not _layer_matches(e.dxf.layer, _ASSET_LAYERS):
+            continue
+        if e.dxftype() != "LWPOLYLINE":
+            continue
+        bb = _bbox_of_points(_poly_xy(e))
+        if bb is None:
+            continue
+        ox0, oy0, ox1, oy1 = bb
+        w_m = ox1 - ox0
+        h_m = oy1 - oy0
+        if w_m < 0.05 or h_m < 0.05:
+            continue
+        cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
+        label = _nearest_annotation(annotations, (cx, cy)) or "Asset"
+        obj_type = _ASSET_TYPE_MAP.get(label.strip().lower(), "custom")
+        x_local = ox0 - rx0
+        y_local = room_h_m - (oy1 - ry0)
+        objects.append(RoomObject(
+            type=obj_type,
+            label=label,
+            x=round(max(0.0, x_local), 3),
+            y=round(max(0.0, y_local), 3),
+            width=round(w_m, 3),
+            height=round(h_m, 3),
+        ))
+    return objects

@@ -56,24 +56,43 @@ def test_parse_geo_only_extracts_window_opening():
 
 @pytest.mark.skipif(not (COMPLETE_DXF.exists() and GEO_ONLY_DXF.exists()),
                     reason="shonan samples missing")
-def test_complete_and_geo_only_produce_same_room():
+def test_complete_and_geo_only_share_room_geometry():
     """
-    File 1 ('complete') is file 5 + an Assets layer of furniture rectangles.
-    The parser must ignore Assets — both files should yield the same room
-    geometry and the same opening count.
+    File 1 ('complete') and file 5 ('geo only') describe the same physical
+    room — same wall geometry, same window. They must agree on dimensions
+    and on the opening (file 1 then ADDS furniture from the Assets layer).
     """
     a = parse_dxf(_read(COMPLETE_DXF)).rooms[0]
     b = parse_dxf(_read(GEO_ONLY_DXF)).rooms[0]
     assert a.width == pytest.approx(b.width)
     assert a.height == pytest.approx(b.height)
-    assert len(a.objects) == len(b.objects)
+    # Geo-only has just the window; complete adds 6 furniture pieces on top.
+    assert len(b.objects) == 1
+    assert len(a.objects) == 1 + 6
 
 
-@pytest.mark.skipif(not GEO_ONLY_DXF.exists(), reason="shonan geo-only DXF missing")
-def test_opening_lies_within_room_bounds():
-    r = parse_dxf(_read(GEO_ONLY_DXF)).rooms[0]
+@pytest.mark.skipif(not COMPLETE_DXF.exists(), reason="shonan complete DXF missing")
+def test_complete_extracts_furniture_from_assets_layer():
+    """File 1's Assets layer holds Bed, Chair, Table, Sink, Toilet, Storage."""
+    r = parse_dxf(_read(COMPLETE_DXF)).rooms[0]
+    labels = {o.label for o in r.objects}
+    assert {"Bed", "Chair", "Table", "Sink", "Toilet", "Storage"} <= labels
+
+    # Type mapping: known furniture → preset type; sink/toilet → 'custom'.
+    by_label = {o.label: o for o in r.objects}
+    assert by_label["Bed"].type     == "bed"
+    assert by_label["Chair"].type   == "chair"
+    assert by_label["Table"].type   == "table"
+    assert by_label["Storage"].type == "cabinet"
+    assert by_label["Sink"].type    == "custom"
+    assert by_label["Toilet"].type  == "custom"
+
+
+@pytest.mark.skipif(not COMPLETE_DXF.exists(), reason="shonan complete DXF missing")
+def test_all_objects_lie_within_room_bounds():
+    r = parse_dxf(_read(COMPLETE_DXF)).rooms[0]
     for o in r.objects:
-        assert -0.05 <= o.x <= r.width + 0.05
-        assert -0.05 <= o.y <= r.height + 0.05
+        assert -0.05 <= o.x <= r.width + 0.05,  f"{o.label}: x={o.x} out of [0,{r.width}]"
+        assert -0.05 <= o.y <= r.height + 0.05, f"{o.label}: y={o.y} out of [0,{r.height}]"
         assert o.width > 0
         assert o.height > 0

@@ -84,10 +84,12 @@ The DXF parser ([`backend/dxf.py`](backend/dxf.py)) expects the Shonan export-to
 |---|---|
 | `Geometry` | Largest-area `LWPOLYLINE` = inner room perimeter → room width × height |
 | `Other` | `LWPOLYLINE` openings → `door` / `window` objects (typed by nearest `Other Annotation` TEXT) |
-| `Assets` | **Ignored** — furniture rectangles would otherwise be detected as phantom rooms |
+| `Assets` | Furniture rectangles → `bed` / `chair` / `table` / `cabinet` / `custom` objects (typed by nearest `Assets Annotation` TEXT) |
 | `Measurement` | Not used (room dimensions already come from the perimeter polyline) |
 
-Coordinates are read in metres (`$INSUNITS = 6`). Near-coincident opening polylines are deduped (the exporter draws each opening as inner + outer face). Only ASCII DXF is supported; binary DXF will be rejected with `415`.
+Coordinates are read in metres (`$INSUNITS = 6`) and Y is flipped from CAD (Y-up) to SVG (Y-down). Near-coincident opening polylines are deduped (the exporter draws each opening as inner + outer face). Only ASCII DXF is supported; binary DXF will be rejected with `415`.
+
+Furniture extraction only fires when the source DXF carries an `Assets` layer — the Shonan tool's "complete" variant does, the "geo only" / "custom objects" variants do not.
 
 ### Metaroom PDF importer details
 
