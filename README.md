@@ -9,7 +9,7 @@ Internal tool: upload a floor plan → get a correctable 2D wall model → rende
 ```
 floor-plan-tool/
 ├── backend/
-│   ├── main.py                # FastAPI server (3 importer endpoints)
+│   ├── main.py                # FastAPI server (2 importer endpoints)
 │   ├── metaroom.py            # Metaroom-by-Amrax PDF parser + single-page fallback
 │   ├── dxf.py                 # Shonan-style ASCII DXF parser
 │   ├── tests/                 # pytest suite (skips when sample data is absent)
@@ -55,7 +55,7 @@ python3 main.py                            # → http://localhost:8000
 
 Always activate the venv before installing. Without `source .venv/bin/activate`, pip falls back to `~/.local/lib/python3.x/site-packages`, which leaks dependency pins into your other Python projects (you'll see "Defaulting to user installation because normal site-packages is not writeable" — that's the warning sign).
 
-A `.env` file in `backend/` with `ANTHROPIC_API_KEY=…` is required for the raster-image importer (`/api/import-image`). The PDF and DXF importers run offline.
+Both importers run fully offline — no API keys or network access required.
 
 ### Frontend
 
@@ -65,17 +65,16 @@ npm install
 npm run dev             # → http://localhost:5173
 ```
 
-Open http://localhost:5173 and drop a floor-plan image, a Metaroom PDF, or a DXF onto the page. A house can hold any number of rooms — each one carries its own `board` + `location` and is exported as a separate `<board>_config.json` from the **Export** button (active room) or **Export All** (every room with a placed radar). House state persists to localStorage automatically.
+Open http://localhost:5173 and drop a Metaroom PDF or a DXF onto the page. A house can hold any number of rooms — each one carries its own `board` + `location` and is exported as a separate `<board>_config.json` from the **Export** button (active room) or **Export All** (every room with a placed radar). House state persists to localStorage automatically.
 
 ## Importers
 
 | Endpoint | Input | Backend file | Notes |
 |---|---|---|---|
-| `POST /api/import-image` | image (PNG/JPG/WEBP/HEIC) | `main.py` | Claude vision — needs `ANTHROPIC_API_KEY` in `backend/.env` |
 | `POST /api/import-metaroom` | PDF | `metaroom.py` | Multi-page Metaroom LiDAR reports *and* single-page Matplotlib exports |
 | `POST /api/import-dxf` | DXF (ASCII) | `dxf.py` | Shonan-style exports: walls + door/window openings, furniture ignored |
 
-All three return the same `{ floor, rooms: [{ name, width, height, objects[] }] }` shape so the frontend handler is uniform.
+Both return the same `{ floor, rooms: [{ name, width, height, objects[] }] }` shape so the frontend handler is uniform.
 
 ### DXF importer details
 

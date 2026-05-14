@@ -1,13 +1,9 @@
-# Core deps for the FastAPI server + the three importers.
+# Core deps for the FastAPI server + the two offline importers.
 # Pins are loose ranges so this file co-exists with other Python projects
-# in the same env (e.g. feast) — pin tighter only if you hit a regression.
-anthropic>=0.94
+# in the same env — pin tighter only if you hit a regression.
 fastapi>=0.111
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
-pillow-heif>=0.16
-Pillow>=10.3
-python-dotenv>=1.0
 
 # Metaroom PDF importer
 pypdf>=4
