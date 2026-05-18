@@ -41,6 +41,18 @@ export async function analyzeImage(
   return res.json() as Promise<AnalyzeResponse>;
 }
 
+/** Upload a DXF file; returns rooms with openings and furniture. */
+export async function importDxf(file: File): Promise<any> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/api/import-dxf`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? "DXF import failed");
+  }
+  return res.json();
+}
+
 /** Send an edited FloorPlan back to re-compute rooms. */
 export async function refineFloorPlan(fp: FloorPlan): Promise<FloorPlan> {
   const res = await fetch(`${BASE}/api/refine`, {

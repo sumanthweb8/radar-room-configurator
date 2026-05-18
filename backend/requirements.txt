@@ -10,6 +10,7 @@ pillow-heif>=0.16
 Pillow>=10.3
 python-dotenv>=1.0
 pypdf>=4
+ezdxf>=1.3
 
 # Used by the legacy OpenCV sketch-detection pipeline (/api/analyze).
 # Modest in size; safe to keep even if you only use the Metaroom path.

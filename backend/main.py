@@ -33,6 +33,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from fastapi.middleware.cors import CORSMiddleware
 
 from detection import DetectionConfig, detect_walls, get_image_dimensions, hand_drawn_config
+from dxf import is_dxf, parse_dxf
 from metaroom import is_metaroom_pdf, parse_metaroom_pdf
 from dimension_matcher import match_dimensions
 from geometry import GeometryConfig, GeometryEngine, hand_drawn_geo_config
@@ -281,6 +282,39 @@ async def import_metaroom(file: UploadFile = File(...)):
                         "width": o.width, "height": o.height,
                         "rotation": o.rotation,
                         **({"z": o.z} if o.z is not None else {}),
+                    } for o in r.objects
+                ],
+            } for r in report.rooms
+        ],
+    }
+
+
+# ─── import-dxf ──────────────────────────────────────────────────────────────
+
+@app.post("/api/import-dxf")
+async def import_dxf(file: UploadFile = File(...)):
+    """Parse a Shonan-style ASCII DXF into rooms with door/window openings and furniture."""
+    content = await file.read()
+    if not is_dxf(content):
+        raise HTTPException(status_code=415, detail="Not an ASCII DXF file")
+    try:
+        report = parse_dxf(content)
+    except Exception as exc:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"DXF parse error: {exc}\n{traceback.format_exc()}")
+
+    return {
+        "floor": None,
+        "rooms": [
+            {
+                "room": {"name": r.name, "width": round(r.width, 3), "height": round(r.height, 3)},
+                "objects": [
+                    {
+                        "type": o.type,
+                        "label": o.label,
+                        "x": o.x, "y": o.y,
+                        "width": o.width, "height": o.height,
+                        "rotation": o.rotation,
                     } for o in r.objects
                 ],
             } for r in report.rooms
