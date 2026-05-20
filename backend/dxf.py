@@ -50,6 +50,8 @@ _ASSET_TYPE_MAP = {
     "cabinet":  "cabinet",
     "storage":  "cabinet",
     "kc":       "radar",
+    "kc2":      "radar",
+    "kc 2":     "radar",
     "toilet":   "custom",
     "sink":     "custom",
     "bathtub":  "custom",
