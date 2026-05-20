@@ -307,7 +307,10 @@ async def import_dxf(file: UploadFile = File(...)):
         "floor": None,
         "rooms": [
             {
-                "room": {"name": r.name, "width": round(r.width, 3), "height": round(r.height, 3)},
+                "room": {
+                    "name": r.name, "width": round(r.width, 3), "height": round(r.height, 3),
+                    **({"polygon": [[round(x, 3), round(y, 3)] for x, y in r.polygon]} if r.polygon else {}),
+                },
                 "objects": [
                     {
                         "type": o.type,

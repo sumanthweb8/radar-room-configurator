@@ -77,6 +77,7 @@ class Room:
     width: float
     height: float
     objects: List[RoomObject] = field(default_factory=list)
+    polygon: Optional[List[Tuple[float, float]]] = None  # room outline in metres — None = rectangle
 
 
 @dataclass

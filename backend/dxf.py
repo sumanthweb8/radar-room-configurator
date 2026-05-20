@@ -33,10 +33,10 @@ from metaroom import FloorInfo, MetaroomReport, Room, RoomObject
 # Layers we extract from. Names are case-insensitive against entity.dxf.layer.
 _WALL_LAYERS    = {"geometry"}
 _OPENING_LAYERS = {"other"}
-_ASSET_LAYERS   = {"assets"}
+_ASSET_LAYERS   = {"assets", "amrax objects"}
 _LABEL_LAYERS   = {"space annotation"}
 _OPENING_LABEL_LAYERS = {"other annotation"}
-_ASSET_LABEL_LAYERS   = {"assets annotation"}
+_ASSET_LABEL_LAYERS   = {"assets annotation", "amrax objects annotation"}
 
 # Asset-label → frontend ObjectType. Labels not listed here fall through to
 # 'custom' so the rectangle still imports — just with the generic shape.
@@ -49,6 +49,7 @@ _ASSET_TYPE_MAP = {
     "wardrobe": "wardrobe",
     "cabinet":  "cabinet",
     "storage":  "cabinet",
+    "kc":       "radar",
     "toilet":   "custom",
     "sink":     "custom",
     "bathtub":  "custom",
@@ -59,6 +60,19 @@ _ASSET_TYPE_MAP = {
 
 
 BBox = Tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
+
+
+def _shoelace_area(pts: List[Tuple[float, float]]) -> float:
+    """Absolute area of a polygon via the shoelace formula."""
+    n = len(pts)
+    if n < 3:
+        return 0.0
+    s = 0.0
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
 
 
 # ───────────────────────── public API ──────────────────────────
@@ -84,12 +98,25 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
     doc = ezdxf.read(io.StringIO(text))
     ms = doc.modelspace()
 
-    wall_bbox = _collect_wall_bbox(ms)
+    wall_bbox, wall_pts = _collect_wall_bbox(ms)
     if wall_bbox is None:
         return MetaroomReport(floor=None, rooms=[])
     x0, y0, x1, y1 = wall_bbox
     room_w_m = x1 - x0
     room_h_m = y1 - y0
+
+    # Convert DXF polygon (Y-up) to room-local (Y-down, origin top-left).
+    polygon = None
+    if wall_pts and len(wall_pts) > 4:
+        poly_local = [
+            (round(px - x0, 3), round(room_h_m - (py - y0), 3))
+            for px, py in wall_pts
+        ]
+        # Only use polygon if the room is non-rectangular (area < 95% of bbox).
+        poly_area = _shoelace_area(poly_local)
+        bbox_area = room_w_m * room_h_m
+        if poly_area < bbox_area * 0.95:
+            polygon = poly_local
 
     name = _extract_room_name(ms) or "Room"
     openings = _collect_openings(ms, wall_bbox)
@@ -100,6 +127,7 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
         width=round(room_w_m, 3),
         height=round(room_h_m, 3),
         objects=openings + assets,
+        polygon=polygon,
     )
     return MetaroomReport(floor=None, rooms=[room])
 
@@ -135,9 +163,9 @@ def _bbox_union(a: Optional[BBox], b: Optional[BBox]) -> Optional[BBox]:
     return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
-def _collect_wall_bbox(ms) -> Optional[BBox]:
+def _collect_wall_bbox(ms) -> Tuple[Optional[BBox], Optional[List[Tuple[float, float]]]]:
     """
-    Bounding box of the room's *inner* clear span, in DXF metres.
+    Bounding box and polygon of the room's *inner* clear span, in DXF metres.
 
     The export draws each wall as a thin filled rectangle (the wall mass) AND
     one large LWPOLYLINE tracing the inner perimeter of all walls combined.
@@ -146,22 +174,28 @@ def _collect_wall_bbox(ms) -> Optional[BBox]:
     in each axis). The user-facing room size is the clear span — readable
     from the single perimeter polyline, which is identifiable as the
     largest-bbox-area LWPOLYLINE on the Geometry layer.
+
+    Returns (bbox, polygon_points) — polygon_points are the raw DXF vertices
+    of the perimeter polyline (for L-shaped / non-rectangular rooms).
     """
     best_bbox: Optional[BBox] = None
     best_area: float = -1.0
+    best_pts: Optional[List[Tuple[float, float]]] = None
     for e in ms:
         if not _layer_matches(e.dxf.layer, _WALL_LAYERS):
             continue
         if e.dxftype() != "LWPOLYLINE":
             continue
-        bb = _bbox_of_points(_poly_xy(e))
+        pts = _poly_xy(e)
+        bb = _bbox_of_points(pts)
         if bb is None:
             continue
         area = (bb[2] - bb[0]) * (bb[3] - bb[1])
         if area > best_area:
             best_area = area
             best_bbox = bb
-    return best_bbox
+            best_pts = pts
+    return best_bbox, best_pts
 
 
 _MTEXT_FORMATTING_RE = re.compile(r"\\[A-Za-z][^\\;]*;|\\[A-Za-z]|{|}")
@@ -309,7 +343,7 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
         ox0, oy0, ox1, oy1 = bb
         w_m = ox1 - ox0
         h_m = oy1 - oy0
-        if w_m < 0.05 or h_m < 0.05:
+        if w_m < 0.03 or h_m < 0.03:
             continue
         cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label = _nearest_annotation(annotations, (cx, cy)) or "Asset"

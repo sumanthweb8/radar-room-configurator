@@ -595,15 +595,32 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
         })}
 
         {/* ── Room floor ── */}
-        <rect x={RX} y={RY} width={W} height={H} fill={floorColor} />
-
-        {/* Sub-grid */}
-        <rect x={RX} y={RY} width={W} height={H} fill="url(#grid50cm)" />
-        {/* 1m grid */}
-        <rect x={RX} y={RY} width={W} height={H} fill="url(#grid1m)" />
-
-        {/* ── Walls (thick border) ── */}
-        <rect x={RX} y={RY} width={W} height={H} fill="none" stroke={wallColor} strokeWidth={3} />
+        {room.polygon ? (
+          <>
+            <defs>
+              <clipPath id="roomClip">
+                <polygon points={room.polygon.map(([px, py]) => `${RX + px * scale},${RY + py * scale}`).join(' ')} />
+              </clipPath>
+            </defs>
+            <polygon
+              points={room.polygon.map(([px, py]) => `${RX + px * scale},${RY + py * scale}`).join(' ')}
+              fill={floorColor}
+            />
+            <rect x={RX} y={RY} width={W} height={H} fill="url(#grid50cm)" clipPath="url(#roomClip)" />
+            <rect x={RX} y={RY} width={W} height={H} fill="url(#grid1m)" clipPath="url(#roomClip)" />
+            <polygon
+              points={room.polygon.map(([px, py]) => `${RX + px * scale},${RY + py * scale}`).join(' ')}
+              fill="none" stroke={wallColor} strokeWidth={3}
+            />
+          </>
+        ) : (
+          <>
+            <rect x={RX} y={RY} width={W} height={H} fill={floorColor} />
+            <rect x={RX} y={RY} width={W} height={H} fill="url(#grid50cm)" />
+            <rect x={RX} y={RY} width={W} height={H} fill="url(#grid1m)" />
+            <rect x={RX} y={RY} width={W} height={H} fill="none" stroke={wallColor} strokeWidth={3} />
+          </>
+        )}
 
         {/* ── Corner coords (radar-relative if radar placed, else room-relative) ── */}
         {(() => {

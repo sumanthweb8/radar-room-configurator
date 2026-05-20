@@ -21,8 +21,9 @@ export interface RoomObject {
 
 export interface RoomConfig {
   name: string;
-  width: number;   // metres
-  height: number;  // metres
+  width: number;   // metres (bounding box)
+  height: number;  // metres (bounding box)
+  polygon?: [number, number][];  // room outline vertices in metres — undefined = rectangle
 }
 
 export type WallSide = 'top' | 'bottom' | 'left' | 'right';

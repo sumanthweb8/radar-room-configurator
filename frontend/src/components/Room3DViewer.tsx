@@ -397,40 +397,124 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
     const floorTex = new THREE.CanvasTexture(floorC);
     floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
     floorTex.repeat.set(room.width * 1.2, room.height * 1.2);
-    const floor = mesh(new THREE.PlaneGeometry(room.width, room.height), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55 }));
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(cx, 0, cz);
-    scene.add(floor);
 
-    // Walls
     const wallH = 2.8;
-    const wallMat  = new THREE.MeshStandardMaterial({ color: 0xf5f0ea, roughness: 0.9, side: THREE.FrontSide });
-    const wallMatT = new THREE.MeshStandardMaterial({ color: 0xf5f0ea, roughness: 0.9, transparent: true, opacity: 0.07, side: THREE.FrontSide });
-
-    const wallBack  = mesh(new THREE.PlaneGeometry(room.width, wallH), wallMat);
-    wallBack.position.set(cx, wallH/2, 0); scene.add(wallBack);
-    const wallLeft  = mesh(new THREE.PlaneGeometry(room.height, wallH), wallMat);
-    wallLeft.rotation.y = Math.PI/2; wallLeft.position.set(0, wallH/2, cz); scene.add(wallLeft);
-    const wallRight = mesh(new THREE.PlaneGeometry(room.height, wallH), wallMat);
-    wallRight.rotation.y = -Math.PI/2; wallRight.position.set(room.width, wallH/2, cz); scene.add(wallRight);
-    const wallFront = mesh(new THREE.PlaneGeometry(room.width, wallH), wallMatT);
-    wallFront.rotation.y = Math.PI; wallFront.position.set(cx, wallH/2, room.height); scene.add(wallFront);
-
-    // Ceiling
+    const wallMat  = new THREE.MeshStandardMaterial({ color: 0xf5f0ea, roughness: 0.9, side: THREE.DoubleSide });
+    const wallMatT = new THREE.MeshStandardMaterial({ color: 0xf5f0ea, roughness: 0.9, transparent: true, opacity: 0.07, side: THREE.DoubleSide });
     const ceilMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.05 });
-    const ceil = mesh(new THREE.PlaneGeometry(room.width, room.height), ceilMat);
-    ceil.rotation.x = Math.PI/2; ceil.position.set(cx, wallH, cz); scene.add(ceil);
 
-    // Skirting
-    const skirtMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d5, roughness: 0.8 });
-    const sk = (w2: number, d2: number, px: number, py: number, pz: number) => {
-      const s = mesh(new THREE.BoxGeometry(w2, 0.09, d2), skirtMat);
-      s.position.set(px, py, pz); scene.add(s);
-    };
-    sk(room.width, 0.02, cx, 0.045, 0.01);
-    sk(room.width, 0.02, cx, 0.045, room.height - 0.01);
-    sk(0.02, room.height, 0.01, 0.045, cz);
-    sk(0.02, room.height, room.width - 0.01, 0.045, cz);
+    if (room.polygon && room.polygon.length >= 3) {
+      // ── Polygon floor (L-shape etc.) ──
+      const shape = new THREE.Shape();
+      shape.moveTo(room.polygon[0][0], room.polygon[0][1]);
+      for (let i = 1; i < room.polygon.length; i++) shape.lineTo(room.polygon[i][0], room.polygon[i][1]);
+      shape.closePath();
+
+      const floorGeo = new THREE.ShapeGeometry(shape);
+      const floorMesh = mesh(floorGeo, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55 }));
+      floorMesh.rotation.x = -Math.PI / 2;
+      floorMesh.position.y = 0;
+      scene.add(floorMesh);
+
+      // Ceiling
+      const ceilGeo = new THREE.ShapeGeometry(shape);
+      const ceilMesh = mesh(ceilGeo, ceilMat);
+      ceilMesh.rotation.x = -Math.PI / 2;
+      ceilMesh.position.y = wallH;
+      scene.add(ceilMesh);
+
+      // Walls along each polygon edge
+      const poly = room.polygon;
+      for (let i = 0; i < poly.length; i++) {
+        const [x1, z1] = poly[i];
+        const [x2, z2] = poly[(i + 1) % poly.length];
+        const dx = x2 - x1, dz = z2 - z1;
+        const len = Math.sqrt(dx * dx + dz * dz);
+        if (len < 0.01) continue;
+        // Determine if this wall faces the camera (front-ish) → make transparent
+        const nz = -dx / len; // outward normal z-component
+        const isFront = nz > 0.5; // wall faces toward viewer
+        const wallGeo = new THREE.PlaneGeometry(len, wallH);
+        const wallMesh = mesh(wallGeo, isFront ? wallMatT : wallMat);
+        wallMesh.position.set((x1 + x2) / 2, wallH / 2, (z1 + z2) / 2);
+        wallMesh.rotation.y = -Math.atan2(dz, dx);
+        scene.add(wallMesh);
+      }
+    } else {
+      // ── Rectangular floor (default) ──
+      const floor = mesh(new THREE.PlaneGeometry(room.width, room.height), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55 }));
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(cx, 0, cz);
+      scene.add(floor);
+
+      const wallBack  = mesh(new THREE.PlaneGeometry(room.width, wallH), wallMat);
+      wallBack.position.set(cx, wallH/2, 0); scene.add(wallBack);
+      const wallLeft  = mesh(new THREE.PlaneGeometry(room.height, wallH), wallMat);
+      wallLeft.rotation.y = Math.PI/2; wallLeft.position.set(0, wallH/2, cz); scene.add(wallLeft);
+      const wallRight = mesh(new THREE.PlaneGeometry(room.height, wallH), wallMat);
+      wallRight.rotation.y = -Math.PI/2; wallRight.position.set(room.width, wallH/2, cz); scene.add(wallRight);
+      const wallFront = mesh(new THREE.PlaneGeometry(room.width, wallH), wallMatT);
+      wallFront.rotation.y = Math.PI; wallFront.position.set(cx, wallH/2, room.height); scene.add(wallFront);
+
+      const ceil = mesh(new THREE.PlaneGeometry(room.width, room.height), ceilMat);
+      ceil.rotation.x = Math.PI/2; ceil.position.set(cx, wallH, cz); scene.add(ceil);
+
+      // Skirting
+      const skirtMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d5, roughness: 0.8 });
+      const sk = (w2: number, d2: number, px: number, py: number, pz: number) => {
+        const s = mesh(new THREE.BoxGeometry(w2, 0.09, d2), skirtMat);
+        s.position.set(px, py, pz); scene.add(s);
+      };
+      sk(room.width, 0.02, cx, 0.045, 0.01);
+      sk(room.width, 0.02, cx, 0.045, room.height - 0.01);
+      sk(0.02, room.height, 0.01, 0.045, cz);
+      sk(0.02, room.height, room.width - 0.01, 0.045, cz);
+    }
+
+    // ── Nearest-wall finder (works for both polygon and rectangle rooms) ──
+    type WallHit = { x: number; z: number; ry: number; dist: number };
+    function nearestWall(ox: number, oz: number): WallHit {
+      if (room.polygon && room.polygon.length >= 3) {
+        const poly = room.polygon;
+        // Signed area determines winding: >0 = CW in Y-down, <0 = CCW in Y-down
+        let signedArea = 0;
+        for (let i = 0; i < poly.length; i++) {
+          const [x1, z1] = poly[i];
+          const [x2, z2] = poly[(i + 1) % poly.length];
+          signedArea += x1 * z2 - x2 * z1;
+        }
+        const cw = signedArea > 0;
+        let best: WallHit = { x: ox, z: 0, ry: 0, dist: Infinity };
+        for (let i = 0; i < poly.length; i++) {
+          const [x1, z1] = poly[i];
+          const [x2, z2] = poly[(i + 1) % poly.length];
+          const dx = x2 - x1, dz = z2 - z1;
+          const len = Math.sqrt(dx * dx + dz * dz);
+          if (len < 0.01) continue;
+          // Project point onto edge
+          let t = ((ox - x1) * dx + (oz - z1) * dz) / (len * len);
+          t = Math.max(0, Math.min(1, t));
+          const px = x1 + t * dx, pz = z1 + t * dz;
+          const d = Math.sqrt((ox - px) ** 2 + (oz - pz) ** 2);
+          if (d < best.dist) {
+            // Inward-facing normal: CW → left perp (-dz, dx), CCW → right perp (dz, -dx)
+            const nx = cw ? -dz : dz;
+            const nz = cw ? dx : -dx;
+            const ry = Math.atan2(nx, nz);
+            best = { x: px, z: pz, ry, dist: d };
+          }
+        }
+        return best;
+      }
+      // Rectangle fallback
+      const dists = [
+        { x: ox,         z: 0,            ry: 0,            dist: oz },
+        { x: ox,         z: room.height,  ry: Math.PI,      dist: room.height - oz },
+        { x: 0,          z: oz,           ry: Math.PI / 2,  dist: ox },
+        { x: room.width, z: oz,           ry: -Math.PI / 2, dist: room.width - ox },
+      ];
+      return dists.reduce((a, b) => a.dist < b.dist ? a : b);
+    }
 
     // Objects
     for (const obj of objects) {
@@ -443,16 +527,10 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
         const tvGroup = makeTV(tvW);
         tvGroup.traverse(c => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; c.receiveShadow = true; } });
 
-        // Find nearest wall
+        // Find nearest wall (polygon-aware)
         const ox = obj.x + w/2, oz = obj.y + d/2;
-        const dists = [
-          { wall: 'back',  dist: oz,                  x: ox,         y: 1.1, z: 0.04,              ry: 0 },
-          { wall: 'front', dist: room.height - oz,    x: ox,         y: 1.1, z: room.height - 0.04, ry: Math.PI },
-          { wall: 'left',  dist: ox,                  x: 0.04,       y: 1.1, z: oz,                 ry: Math.PI/2 },
-          { wall: 'right', dist: room.width - ox,     x: room.width-0.04, y: 1.1, z: oz,            ry: -Math.PI/2 },
-        ];
-        const nearest = dists.reduce((a, b) => a.dist < b.dist ? a : b);
-        tvGroup.position.set(nearest.x, nearest.y, nearest.z);
+        const nearest = nearestWall(ox, oz);
+        tvGroup.position.set(nearest.x, 1.1, nearest.z);
         tvGroup.rotation.y = nearest.ry;
         scene.add(tvGroup);
         continue;
@@ -464,14 +542,8 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
         group.traverse(c => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; c.receiveShadow = true; } });
         const cx2 = obj.x + w/2, cy2 = obj.y + d/2;
         const elev = obj.type === 'window' ? 0.9 : 0;
-        const dists2 = [
-          { dist: cy2,                  pos: [cx2, elev, 0.02],              ry: 0 },
-          { dist: room.height - cy2,    pos: [cx2, elev, room.height-0.02],  ry: Math.PI },
-          { dist: cx2,                  pos: [0.02, elev, cy2],              ry: Math.PI/2 },
-          { dist: room.width - cx2,     pos: [room.width-0.02, elev, cy2],   ry: -Math.PI/2 },
-        ];
-        const near = dists2.reduce((a, b) => a.dist < b.dist ? a : b);
-        group.position.set(near.pos[0], near.pos[1], near.pos[2]);
+        const near = nearestWall(cx2, cy2);
+        group.position.set(near.x, elev, near.z);
         group.rotation.y = near.ry;
         scene.add(group);
         continue;
@@ -485,19 +557,13 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
 
         const ox = obj.x + w / 2, oz = obj.y + d / 2;
 
-        // Nearest wall → orientation for the group
-        const wallOpts = [
-          { dist: oz,               facing: 0,           wx: ox,          wz: 0            },
-          { dist: room.height - oz, facing: Math.PI,     wx: ox,          wz: room.height  },
-          { dist: ox,               facing: Math.PI / 2, wx: 0,           wz: oz           },
-          { dist: room.width - ox,  facing: -Math.PI/2,  wx: room.width,  wz: oz           },
-        ];
-        const nearW = wallOpts.reduce((a, b) => a.dist < b.dist ? a : b);
+        // Nearest wall → orientation for the group (polygon-aware)
+        const nearW = nearestWall(ox, oz);
 
         // Group anchored at wall position (floor level), rotated to face room
         const rg = new THREE.Group();
-        rg.position.set(nearW.wx, 0, nearW.wz);
-        rg.rotation.y = nearW.facing;
+        rg.position.set(nearW.x, 0, nearW.z);
+        rg.rotation.y = nearW.ry;
 
         // 1 ── Sensor device ─────────────────────────────────────────────────
         const device = makeRadarDevice();

@@ -169,7 +169,7 @@ export default function App() {
           id:           genId(),
           label:        r.room.name ?? 'Imported Room',
           area,
-          room:         { name: r.room.name, width: w, height: h },
+          room:         { name: r.room.name, width: w, height: h, polygon: r.room.polygon },
           objects:      makeRoomObjects(r.objects),
           selectedId:   null,
           adjacentRooms: [],
