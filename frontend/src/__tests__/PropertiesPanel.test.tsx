@@ -53,18 +53,26 @@ describe('PropertiesPanel — object selected', () => {
     expect(screen.getByDisplayValue('2')).toBeInTheDocument();
   });
 
-  it('shows rotation buttons', () => {
+  it('shows facing buttons for bed', () => {
     render(<PropertiesPanel {...defaultProps} object={makeObject()} />);
+    expect(screen.getByText('↑ Top')).toBeInTheDocument();
+    expect(screen.getByText('→ Right')).toBeInTheDocument();
+    expect(screen.getByText('↓ Bottom')).toBeInTheDocument();
+    expect(screen.getByText('← Left')).toBeInTheDocument();
+  });
+
+  it('shows rotation buttons for non-bed types', () => {
+    render(<PropertiesPanel {...defaultProps} object={makeObject({ type: 'table', label: 'Table', color: '#ed8936' })} />);
     expect(screen.getByText('90°')).toBeInTheDocument();
     expect(screen.getByText('180°')).toBeInTheDocument();
     expect(screen.getByText('270°')).toBeInTheDocument();
   });
 
-  it('calls onUpdate when rotation button clicked', async () => {
+  it('calls onUpdate when facing button clicked', async () => {
     const onUpdate = vi.fn();
     const user = userEvent.setup();
     render(<PropertiesPanel {...defaultProps} object={makeObject()} onUpdate={onUpdate} />);
-    await user.click(screen.getByText('90°'));
+    await user.click(screen.getByText('→ Right'));
     expect(onUpdate).toHaveBeenCalledWith({ rotation: 90 });
   });
 

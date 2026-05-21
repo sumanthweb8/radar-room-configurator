@@ -52,6 +52,7 @@ _ASSET_TYPE_MAP = {
     "kc":       "radar",
     "kc2":      "radar",
     "kc 2":     "radar",
+    "radar":    "radar",
     "toilet":   "custom",
     "sink":     "custom",
     "bathtub":  "custom",
@@ -399,7 +400,8 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
             continue
         cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label = _nearest_annotation(annotations, (cx, cy)) or "Asset"
-        obj_type = _ASSET_TYPE_MAP.get(label.strip().lower(), "custom")
+        key = label.strip().lower()
+        obj_type = _ASSET_TYPE_MAP.get(key) or _ASSET_TYPE_MAP.get(key.split()[0], "custom")
         x_local = ox0 - rx0
         y_local = room_h_m - (oy1 - ry0)
 

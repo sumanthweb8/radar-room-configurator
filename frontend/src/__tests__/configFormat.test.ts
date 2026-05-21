@@ -12,25 +12,39 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { RoomObject } from '../types';
+import type { RoomObject, RoomConfig } from '../types';
+import { getRadarFacing } from '../types';
 
-// ── Inline buildConfig so tests are independent of App.tsx refactors ──────────
-function buildConfig(objects: RoomObject[]) {
+// ── Inline buildConfig matching App.tsx (with rotated coordinates) ─────────────
+function buildConfig(objects: RoomObject[], room: RoomConfig) {
   const radar   = objects.find(o => o.type === 'radar');
   const originX = radar ? radar.x + radar.width  / 2 : 0;
   const originY = radar ? radar.y + radar.height / 2 : 0;
 
+  const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
+  const right_x = -fwd_y, right_y = fwd_x;
+
   return objects.map(obj => {
-    const left   = +(obj.x             - originX).toFixed(3);
-    const right  = +(obj.x + obj.width  - originX).toFixed(3);
-    const top    = +(originY - obj.y            ).toFixed(3);
-    const bottom = +(originY - (obj.y + obj.height)).toFixed(3);
+    const corners = [
+      [obj.x,             obj.y],
+      [obj.x + obj.width, obj.y],
+      [obj.x,             obj.y + obj.height],
+      [obj.x + obj.width, obj.y + obj.height],
+    ];
+    const transformed = corners.map(([rx, ry]) => {
+      const dx = rx - originX, dy = ry - originY;
+      return [+(dx * right_x + dy * right_y).toFixed(3), +(dx * fwd_x + dy * fwd_y).toFixed(3)];
+    });
+    const xs = transformed.map(c => c[0]), ys = transformed.map(c => c[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+
     return {
       name:         obj.label.toLowerCase().replace(/\s+/g, '_'),
-      top_left:     [left,  top],
-      top_right:    [right, top],
-      bottom_left:  [left,  bottom],
-      bottom_right: [right, bottom],
+      top_left:     [minX, maxY],
+      top_right:    [maxX, maxY],
+      bottom_left:  [minX, minY],
+      bottom_right: [maxX, minY],
       margin_top:    obj.marginTop,
       margin_bottom: obj.marginBottom,
       margin_left:   obj.marginLeft,
@@ -89,9 +103,11 @@ const DOOR2 = makeObj({
 });
 
 const objects = [RADAR, BED, DOOR1, DOOR2];
+// 5m × 5m room — radar at y=4.1 is nearest bottom wall → faces upward (ny=-1)
+const ROOM: RoomConfig = { name: 'Test Room', width: 5, height: 5 };
 
 describe('Config format — coordinate system (LOCKED)', () => {
-  const result = buildConfig(objects);
+  const result = buildConfig(objects, ROOM);
   // radar itself is included in output — find non-radar entries
   const bed   = result.find(o => o.name === 'bed')!;
   const door1 = result.find(o => o.name === 'door1')!;

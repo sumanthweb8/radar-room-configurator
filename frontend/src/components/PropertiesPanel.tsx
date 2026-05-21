@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from '../types';
-import { OBJECT_PRESETS, detectDoorWall } from '../types';
+import { OBJECT_PRESETS, detectDoorWall, getRadarFacing } from '../types';
 
 interface Props {
   object: RoomObject | null;
@@ -85,15 +85,63 @@ export const PropertiesPanel: React.FC<Props> = ({
     const originX = radar ? radar.x + radar.width  / 2 : 0;
     const originY = radar ? radar.y + radar.height / 2 : 0;
 
-    const configObjs = objects.map(obj => {
-      const left   = +(obj.x             - originX).toFixed(3);
-      const right  = +(obj.x + obj.width  - originX).toFixed(3);
-      const top    = +(originY - obj.y            ).toFixed(3);
-      const bottom = +(originY - (obj.y + obj.height)).toFixed(3);
-      return { name: obj.label.toLowerCase().replace(/\s+/g,'_'), top_left:[left,top], bottom_right:[right,bottom] };
+    const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
+    const right_x = -fwd_y, right_y = fwd_x;
+
+    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+    let doorIdx = 0;
+    const configObjs = exportable.map(obj => {
+      const corners = [
+        [obj.x,             obj.y],
+        [obj.x + obj.width, obj.y],
+        [obj.x,             obj.y + obj.height],
+        [obj.x + obj.width, obj.y + obj.height],
+      ];
+      const transformed = corners.map(([rx, ry]) => {
+        const dx = rx - originX, dy = ry - originY;
+        return [+(dx * right_x + dy * right_y).toFixed(3), +(dx * fwd_x + dy * fwd_y).toFixed(3)];
+      });
+      const xs = transformed.map(c => c[0]), ys = transformed.map(c => c[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+      const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+      const entry: Record<string, unknown> = {
+        name,
+        top_left:     [minX, maxY],
+        top_right:    [maxX, maxY],
+        bottom_left:  [minX, minY],
+        bottom_right: [maxX, minY],
+        margin_top:    obj.marginTop    ?? 0,
+        margin_bottom: obj.marginBottom ?? 0,
+        margin_left:   obj.marginLeft   ?? 0,
+        margin_right:  obj.marginRight  ?? 0,
+      };
+      if (obj.type === 'bed') {
+        entry.top_height    = 0.5;
+        entry.bottom_height = 0.5;
+        entry.right_width   = 0.5;
+        entry.left_width    = 0.5;
+      }
+      return entry;
     });
 
-    const preview = JSON.stringify({ device_configs: { board: '<board>', location: room.name }, objects: configObjs }, null, 2);
+    const names     = configObjs.map(o => o.name as string);
+    const bedNames  = names.filter(n => n === 'bed');
+    const doorNames = names.filter(n => (n as string).startsWith('door'));
+    const previewObj = {
+      device_configs: { board: '<board>', location: room.name },
+      objects: configObjs,
+      state_machine:               { objects: names },
+      out_of_room_alerts:          { objects: doorNames },
+      out_of_bed_alerts:           { objects: bedNames },
+      'on_bed-toss':               { objects: bedNames },
+      journey_mapping_time_taken:  { objects: names },
+      state_machine_v2:            { objects: bedNames },
+      state_machine_flickering:    { objects: bedNames },
+      near_edge_alerts:            { objects: bedNames },
+    };
+    const preview = JSON.stringify(previewObj, null, 2);
 
     return (
       <aside style={{ width: 240, background: bg, borderLeft: `1px solid ${border}`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>

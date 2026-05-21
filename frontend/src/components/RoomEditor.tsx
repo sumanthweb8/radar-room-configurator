@@ -662,98 +662,107 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
           const rcx = RX + rox * scale;
           const rcy = RY + roy * scale;
 
-          // Nearest wall → coverage direction in room-space
-          const dTop    = roy;
-          const dBottom = room.height - roy;
-          const dLeft   = rox;
-          const dRight  = room.width - rox;
-          const minD    = Math.min(dTop, dBottom, dLeft, dRight);
-
-          // coverage rect in room coords: [x1,y1,x2,y2]
-          let cx1: number, cy1: number, cx2: number, cy2: number;
-          let gridAxis: 'h' | 'v'; // h = horizontal gridlines inside rect, v = vertical
-          if (minD === dTop) {
-            // wall is top → coverage goes downward
-            cx1 = rox - SIDE; cy1 = 0;
-            cx2 = rox + SIDE; cy2 = RANGE;
-            gridAxis = 'h';
-          } else if (minD === dBottom) {
-            // wall is bottom → coverage goes upward
-            cx1 = rox - SIDE; cy1 = room.height - RANGE;
-            cx2 = rox + SIDE; cy2 = room.height;
-            gridAxis = 'h';
-          } else if (minD === dLeft) {
-            // wall is left → coverage goes rightward
-            cx1 = 0;           cy1 = roy - SIDE;
-            cx2 = RANGE;       cy2 = roy + SIDE;
-            gridAxis = 'v';
+          // Polygon-aware nearest wall detection (matching 3D viewer)
+          let nx = 0, ny = -1;
+          let bestDist = Infinity;
+          if (room.polygon && room.polygon.length >= 3) {
+            const poly = room.polygon;
+            let signedArea = 0;
+            for (let i = 0; i < poly.length; i++) {
+              const [x1, y1] = poly[i];
+              const [x2, y2] = poly[(i + 1) % poly.length];
+              signedArea += x1 * y2 - x2 * y1;
+            }
+            const cw = signedArea > 0;
+            for (let i = 0; i < poly.length; i++) {
+              const [x1, y1] = poly[i];
+              const [x2, y2] = poly[(i + 1) % poly.length];
+              const edx = x2 - x1, edy = y2 - y1;
+              const len = Math.sqrt(edx * edx + edy * edy);
+              if (len < 0.01) continue;
+              let t = ((rox - x1) * edx + (roy - y1) * edy) / (len * len);
+              t = Math.max(0, Math.min(1, t));
+              const px = x1 + t * edx, py = y1 + t * edy;
+              const d = Math.sqrt((rox - px) ** 2 + (roy - py) ** 2);
+              if (d < bestDist) {
+                bestDist = d;
+                nx = cw ? -edy / len : edy / len;
+                ny = cw ? edx / len : -edx / len;
+              }
+            }
           } else {
-            // wall is right → coverage goes leftward
-            cx1 = room.width - RANGE; cy1 = roy - SIDE;
-            cx2 = room.width;         cy2 = roy + SIDE;
-            gridAxis = 'v';
+            const dTop = roy, dBottom = room.height - roy, dLeft = rox, dRight = room.width - rox;
+            bestDist = Math.min(dTop, dBottom, dLeft, dRight);
+            if (bestDist === dTop)         { nx = 0; ny = 1; }
+            else if (bestDist === dBottom)  { nx = 0; ny = -1; }
+            else if (bestDist === dLeft)    { nx = 1; ny = 0; }
+            else                            { nx = -1; ny = 0; }
           }
 
-          // Clamp to room bounds
-          cx1 = Math.max(0, cx1); cy1 = Math.max(0, cy1);
-          cx2 = Math.min(room.width, cx2); cy2 = Math.min(room.height, cy2);
+          // Frame-mounted radar: if far from any wall, use aspect ratio to
+          // determine facing axis (long side = mounting surface).
+          const rw = radarObj.width, rh = radarObj.height;
+          if (bestDist > 0.3) {
+            if (rh > rw * 1.2) {
+              // Taller than wide → mounted on vertical surface → face left or right
+              nx = rox < room.width / 2 ? 1 : -1;
+              ny = 0;
+            } else if (rw > rh * 1.2) {
+              // Wider than tall → mounted on horizontal surface → face up or down
+              nx = 0;
+              ny = roy < room.height / 2 ? 1 : -1;
+            }
+          }
 
-          // Convert to SVG px
-          const sx1 = RX + cx1 * scale, sy1 = RY + cy1 * scale;
-          const sx2 = RX + cx2 * scale, sy2 = RY + cy2 * scale;
+          // Coverage rect: extends from radar position along inward normal
+          const cx1 = rox + Math.min(0, nx) * RANGE - Math.abs(ny) * SIDE;
+          const cy1 = roy + Math.min(0, ny) * RANGE - Math.abs(nx) * SIDE;
+          const cx2 = rox + Math.max(0, nx) * RANGE + Math.abs(ny) * SIDE;
+          const cy2 = roy + Math.max(0, ny) * RANGE + Math.abs(nx) * SIDE;
+
+          // Clamp to room bounds
+          const clx1 = Math.max(0, cx1), cly1 = Math.max(0, cy1);
+          const clx2 = Math.min(room.width, cx2), cly2 = Math.min(room.height, cy2);
+
+          const sx1 = RX + clx1 * scale, sy1 = RY + cly1 * scale;
+          const sx2 = RX + clx2 * scale, sy2 = RY + cly2 * scale;
           const sw  = sx2 - sx1, sh = sy2 - sy1;
 
-          // Grid lines at 1m, 2m, 3m inside coverage (parallel to the near wall)
+          // Grid lines at 1m, 2m, 3m from radar along coverage direction
+          const gridAxis: 'h' | 'v' = Math.abs(nx) > Math.abs(ny) ? 'v' : 'h';
           const gridLines: React.ReactNode[] = [];
           if (gridAxis === 'h') {
-            // horizontal lines at distances 1m, 2m, 3m from radar wall
-            const wallY = minD === dTop ? 0 : room.height;
-            const dir   = minD === dTop ? 1 : -1;
             [1, 2, 3].forEach((d, i) => {
-              const gy = RY + (wallY + dir * d) * scale;
+              const gy = RY + (roy + ny * d) * scale;
               if (gy > sy1 && gy < sy2)
                 gridLines.push(<line key={d} x1={sx1} y1={gy} x2={sx2} y2={gy}
                   stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 3" opacity={0.35 - i * 0.08} />);
             });
           } else {
-            const wallX = minD === dLeft ? 0 : room.width;
-            const dir   = minD === dLeft ? 1 : -1;
             [1, 2, 3].forEach((d, i) => {
-              const gx = RX + (wallX + dir * d) * scale;
+              const gx = RX + (rox + nx * d) * scale;
               if (gx > sx1 && gx < sx2)
                 gridLines.push(<line key={d} x1={gx} y1={sy1} x2={gx} y2={sy2}
                   stroke="#a78bfa" strokeWidth={0.8} strokeDasharray="6 3" opacity={0.35 - i * 0.08} />);
             });
           }
 
+          // Far edge centre (end of beam line)
+          const farCx = RX + (rox + nx * RANGE) * scale;
+          const farCy = RY + (roy + ny * RANGE) * scale;
+
           return (
             <g style={{ pointerEvents: 'none' }}>
-              {/* Coverage fill */}
               <rect x={sx1} y={sy1} width={sw} height={sh}
                 fill="#8b5cf6" fillOpacity={0.08} />
-
-              {/* Coverage border */}
               <rect x={sx1} y={sy1} width={sw} height={sh}
                 fill="none" stroke="#a78bfa" strokeWidth={1.2} strokeDasharray="8 4" opacity={0.65} />
-
-              {/* Depth grid lines */}
               {gridLines}
-
-              {/* Beam line from radar centre to far edge centre */}
+              <line x1={rcx} y1={rcy} x2={farCx} y2={farCy}
+                stroke="#c4b5fd" strokeWidth={1} strokeDasharray="5 3" opacity={0.5} />
               {(() => {
-                const farCx = minD === dLeft ? sx1 : minD === dRight ? sx2 : rcx;
-                const farCy = minD === dTop  ? sy1 : minD === dBottom ? sy2 : rcy;
-                return <line x1={rcx} y1={rcy} x2={farCx} y2={farCy}
-                  stroke="#c4b5fd" strokeWidth={1} strokeDasharray="5 3" opacity={0.5} />;
-              })()}
-
-              {/* Coverage label — range badge on far edge */}
-              {(() => {
-                const lx = (sx1 + sx2) / 2;
-                const ly = minD === dTop ? sy1 - 4 : minD === dBottom ? sy2 + 12
-                         : minD === dLeft ? sx1 - 4 : sx2 + 12; // reuse lx for vertical
-                const labelX = (gridAxis === 'v' && minD === dLeft) ? sx1 - 2 : (gridAxis === 'v' && minD === dRight) ? sx2 + 2 : lx;
-                const labelY = (gridAxis === 'h' && minD === dTop) ? sy1 - 4 : (gridAxis === 'h' && minD === dBottom) ? sy2 + 12 : (sy1 + sy2) / 2;
+                const labelX = (sx1 + sx2) / 2;
+                const labelY = gridAxis === 'h' ? (ny > 0 ? sy2 + 12 : sy1 - 4) : (sy1 + sy2) / 2;
                 return (
                   <g>
                     <rect x={labelX - 22} y={labelY - 9} width={44} height={13} rx={4} fill="#7c3aed" opacity={0.85} />

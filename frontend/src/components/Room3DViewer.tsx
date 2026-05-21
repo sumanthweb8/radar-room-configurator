@@ -580,25 +580,39 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
         continue;
       }
 
-      // ── Radar (wall-mounted, 45° tilt, wedge coverage) ───────────────────
+      // ── Radar (wall or frame mounted, 45° tilt, wedge coverage) ──────────
       if (obj.type === 'radar') {
         const MOUNT_H = 2.2;   // height on wall (m)
         const RANGE   = 4.0;   // forward coverage (m)
         const SIDE    = 2.0;   // lateral coverage each side (m)
+        const WALL_SNAP = 0.5; // snap to wall if closer than this (m)
 
         const ox = obj.x + w / 2, oz = obj.y + d / 2;
 
         // Nearest wall → orientation for the group (polygon-aware)
         const nearW = nearestWall(ox, oz);
+        const onWall = nearW.dist < WALL_SNAP;
 
-        // Group anchored at wall position (floor level), rotated to face room
+        // Frame-mounted radar: if far from wall, use aspect ratio to pick direction.
+        // Long side = mounting surface, facing is perpendicular to it.
+        let ry = nearW.ry;
+        if (!onWall && nearW.dist > 0.3) {
+          if (d > w * 1.2) {
+            // Taller than wide → vertical mount → face left or right
+            ry = ox < room.width / 2 ? Math.PI / 2 : -Math.PI / 2;
+          } else if (w > d * 1.2) {
+            // Wider than tall → horizontal mount → face up or down
+            ry = oz < room.height / 2 ? 0 : Math.PI;
+          }
+        }
+
         const rg = new THREE.Group();
-        rg.position.set(nearW.x, 0, nearW.z);
-        rg.rotation.y = nearW.ry;
+        rg.position.set(onWall ? nearW.x : ox, 0, onWall ? nearW.z : oz);
+        rg.rotation.y = ry;
 
         // 1 ── Sensor device ─────────────────────────────────────────────────
         const device = makeRadarDevice();
-        device.position.set(0, MOUNT_H, 0.01); // flush to wall
+        device.position.set(0, MOUNT_H, onWall ? 0.01 : 0);
         rg.add(device);
 
         // 2 ── Coverage rectangle on floor (full width from wall) ─────────────

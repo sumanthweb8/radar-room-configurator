@@ -1,38 +1,58 @@
 /**
- * Tests for the buildConfig function (exported via App internals).
- * We test the shape of the generated JSON directly.
+ * Tests for the buildConfig function.
  */
 import { describe, it, expect } from 'vitest';
 import type { RoomObject } from '../types';
 
-// Duplicate buildConfig here to test it independently
 function buildConfig(objects: RoomObject[], board: string, location: string) {
-  const ALL_FEATURES = [
-    'state_machine','out_of_room_alerts','out_of_bed_alerts',
-    'on_bed-toss','journey_mapping_time_taken','state_machine_v2',
-    'state_machine_flickering','near_edge_alerts',
-  ];
-  const DEFAULT_FEATURES: Record<string, string[]> = {
-    bed:    ['state_machine','out_of_bed_alerts','on_bed-toss','journey_mapping_time_taken','state_machine_v2','state_machine_flickering','near_edge_alerts'],
-    door:   ['state_machine','out_of_room_alerts','journey_mapping_time_taken'],
-    window: [], radar: [], sofa: ['state_machine','journey_mapping_time_taken'],
-    chair:  ['state_machine','journey_mapping_time_taken'], table: [], desk: [],
-    wardrobe: [], cabinet: [], person: [], custom: [],
+  const radar   = objects.find(o => o.type === 'radar');
+  const originX = radar ? radar.x + radar.width  / 2 : 0;
+  const originY = radar ? radar.y + radar.height / 2 : 0;
+
+  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+  let doorIdx = 0;
+  const serialized = exportable.map(obj => {
+    const left   = +(obj.x            - originX).toFixed(3);
+    const right  = +(obj.x + obj.width - originX).toFixed(3);
+    const top    = +(originY - obj.y           ).toFixed(3);
+    const bottom = +(originY - (obj.y + obj.height)).toFixed(3);
+    const name   = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+    const entry: Record<string, unknown> = {
+      name,
+      top_left:     [left,  top],
+      top_right:    [right, top],
+      bottom_left:  [left,  bottom],
+      bottom_right: [right, bottom],
+      margin_top:    obj.marginTop    ?? 0,
+      margin_bottom: obj.marginBottom ?? 0,
+      margin_left:   obj.marginLeft   ?? 0,
+      margin_right:  obj.marginRight  ?? 0,
+    };
+    if (obj.type === 'bed') {
+      entry.top_height    = 0.5;
+      entry.bottom_height = 0.5;
+      entry.right_width   = 0.5;
+      entry.left_width    = 0.5;
+    }
+    return entry;
+  });
+
+  const names     = serialized.map(o => o.name as string);
+  const bedNames  = names.filter(n => n === 'bed');
+  const doorNames = names.filter(n => n.startsWith('door'));
+
+  return {
+    device_configs: { board, location },
+    objects: serialized,
+    state_machine:               { objects: names },
+    out_of_room_alerts:          { objects: doorNames },
+    out_of_bed_alerts:           { objects: bedNames },
+    'on_bed-toss':               { objects: bedNames },
+    journey_mapping_time_taken:  { objects: names },
+    state_machine_v2:            { objects: bedNames },
+    state_machine_flickering:    { objects: bedNames },
+    near_edge_alerts:            { objects: bedNames },
   };
-  const serialized = objects.map(obj => ({
-    name:         obj.label.toLowerCase().replace(/\s+/g, '_'),
-    top_left:     [+obj.x.toFixed(3), +obj.y.toFixed(3)],
-    top_right:    [+(obj.x + obj.width).toFixed(3), +obj.y.toFixed(3)],
-    bottom_left:  [+obj.x.toFixed(3), +(obj.y + obj.height).toFixed(3)],
-    bottom_right: [+(obj.x + obj.width).toFixed(3), +(obj.y + obj.height).toFixed(3)],
-    margin_top: 0, margin_bottom: 0, margin_left: 0, margin_right: 0,
-  }));
-  const result: Record<string, unknown> = { device_configs: { board, location }, objects: serialized };
-  for (const feature of ALL_FEATURES) {
-    const names = objects.filter(o => (DEFAULT_FEATURES[o.type] ?? []).includes(feature)).map(o => o.label.toLowerCase().replace(/\s+/g, '_'));
-    if (names.length > 0) result[feature] = { objects: names };
-  }
-  return result;
 }
 
 function obj(overrides: Partial<RoomObject> = {}): RoomObject {
@@ -42,59 +62,58 @@ function obj(overrides: Partial<RoomObject> = {}): RoomObject {
 describe('buildConfig', () => {
   it('produces device_configs block', () => {
     const cfg = buildConfig([], 'xwr6843', 'bedroom');
-    expect((cfg.device_configs as any).board).toBe('xwr6843');
-    expect((cfg.device_configs as any).location).toBe('bedroom');
+    expect(cfg.device_configs.board).toBe('xwr6843');
+    expect(cfg.device_configs.location).toBe('bedroom');
   });
 
-  it('serialises object coordinates', () => {
-    const cfg = buildConfig([obj({ x: 1, y: 2, width: 1.4, height: 2 })], 'b', 'l');
-    const o = (cfg.objects as any[])[0];
-    expect(o.top_left).toEqual([1, 2]);
-    expect(o.bottom_right).toEqual([2.4, 4]);
-  });
-
-  it('converts label to snake_case', () => {
-    const cfg = buildConfig([obj({ label: 'My Bed' })], 'b', 'l');
-    expect((cfg.objects as any[])[0].name).toBe('my_bed');
-  });
-
-  it('includes state_machine for bed', () => {
-    const cfg = buildConfig([obj({ type: 'bed', label: 'bed' })], 'b', 'l');
-    expect((cfg.state_machine as any).objects).toContain('bed');
-  });
-
-  it('includes out_of_bed_alerts for bed', () => {
-    const cfg = buildConfig([obj({ type: 'bed', label: 'bed' })], 'b', 'l');
-    expect((cfg.out_of_bed_alerts as any).objects).toContain('bed');
-  });
-
-  it('does NOT include out_of_bed_alerts for sofa', () => {
-    const cfg = buildConfig([obj({ type: 'sofa', label: 'sofa' })], 'b', 'l');
-    expect(cfg.out_of_bed_alerts).toBeUndefined();
-  });
-
-  it('includes out_of_room_alerts for door', () => {
-    const cfg = buildConfig([obj({ type: 'door', label: 'door' })], 'b', 'l');
-    expect((cfg.out_of_room_alerts as any).objects).toContain('door');
-  });
-
-  it('does not emit feature sections for empty lists', () => {
-    const cfg = buildConfig([obj({ type: 'radar', label: 'radar' })], 'b', 'l');
-    expect(cfg.state_machine).toBeUndefined();
-  });
-
-  it('handles multiple objects', () => {
+  it('only exports bed and door objects', () => {
     const cfg = buildConfig([
       obj({ type: 'bed', label: 'Bed' }),
-      obj({ type: 'sofa', label: 'Sofa' }),
+      obj({ id: '2', type: 'table', label: 'Table' }),
+      obj({ id: '3', type: 'door', label: 'Door' }),
+      obj({ id: '4', type: 'window', label: 'Window' }),
+      obj({ id: '5', type: 'radar', label: 'Radar' }),
     ], 'b', 'l');
-    expect((cfg.objects as any[]).length).toBe(2);
-    expect((cfg.state_machine as any).objects).toContain('bed');
-    expect((cfg.state_machine as any).objects).toContain('sofa');
+    const names = (cfg.objects as any[]).map((o: any) => o.name);
+    expect(names).toEqual(['bed', 'door1']);
   });
 
-  it('rounds coordinates to 3dp', () => {
-    const cfg = buildConfig([obj({ x: 1.0001, y: 0, width: 1, height: 1 })], 'b', 'l');
-    expect((cfg.objects as any[])[0].top_left[0]).toBe(1);
+  it('auto-names doors as door1, door2', () => {
+    const cfg = buildConfig([
+      obj({ id: '1', type: 'door', label: 'Door (upper)' }),
+      obj({ id: '2', type: 'door', label: 'Door (lower)' }),
+    ], 'b', 'l');
+    const names = (cfg.objects as any[]).map((o: any) => o.name);
+    expect(names).toEqual(['door1', 'door2']);
+  });
+
+  it('adds height/width fields for bed only', () => {
+    const cfg = buildConfig([
+      obj({ type: 'bed', label: 'Bed' }),
+      obj({ id: '2', type: 'door', label: 'Door' }),
+    ], 'b', 'l');
+    const bed = (cfg.objects as any[])[0];
+    expect(bed.top_height).toBe(0.5);
+    expect(bed.bottom_height).toBe(0.5);
+    expect(bed.right_width).toBe(0.5);
+    expect(bed.left_width).toBe(0.5);
+    const door = (cfg.objects as any[])[1];
+    expect(door.top_height).toBeUndefined();
+  });
+
+  it('feature sections are correct', () => {
+    const cfg = buildConfig([
+      obj({ type: 'bed', label: 'Bed' }),
+      obj({ id: '2', type: 'door', label: 'Door A' }),
+      obj({ id: '3', type: 'door', label: 'Door B' }),
+    ], 'b', 'l');
+    expect(cfg.state_machine.objects).toEqual(['bed', 'door1', 'door2']);
+    expect(cfg.out_of_room_alerts.objects).toEqual(['door1', 'door2']);
+    expect(cfg.out_of_bed_alerts.objects).toEqual(['bed']);
+    expect(cfg['on_bed-toss'].objects).toEqual(['bed']);
+    expect(cfg.journey_mapping_time_taken.objects).toEqual(['bed', 'door1', 'door2']);
+    expect(cfg.state_machine_v2.objects).toEqual(['bed']);
+    expect(cfg.state_machine_flickering.objects).toEqual(['bed']);
+    expect(cfg.near_edge_alerts.objects).toEqual(['bed']);
   });
 });

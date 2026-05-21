@@ -52,6 +52,61 @@ export interface AdjacentRoom {
   doors?: AdjacentRoomDoor[];
 }
 
+/**
+ * Returns the radar's facing direction as a unit normal (nx, ny) in room-space (Y-down).
+ * Uses polygon-aware nearest wall when available, with aspect-ratio fallback
+ * for frame-mounted radars far from any wall.
+ */
+export function getRadarFacing(radar: RoomObject, room: RoomConfig): { nx: number; ny: number } {
+  const rox = radar.x + radar.width / 2;
+  const roy = radar.y + radar.height / 2;
+  let nx = 0, ny = -1, bestDist = Infinity;
+
+  if (room.polygon && room.polygon.length >= 3) {
+    const poly = room.polygon;
+    let signedArea = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const [x1, y1] = poly[i];
+      const [x2, y2] = poly[(i + 1) % poly.length];
+      signedArea += x1 * y2 - x2 * y1;
+    }
+    const cw = signedArea > 0;
+    for (let i = 0; i < poly.length; i++) {
+      const [x1, y1] = poly[i];
+      const [x2, y2] = poly[(i + 1) % poly.length];
+      const edx = x2 - x1, edy = y2 - y1;
+      const len = Math.sqrt(edx * edx + edy * edy);
+      if (len < 0.01) continue;
+      let t = ((rox - x1) * edx + (roy - y1) * edy) / (len * len);
+      t = Math.max(0, Math.min(1, t));
+      const px = x1 + t * edx, py = y1 + t * edy;
+      const d = Math.sqrt((rox - px) ** 2 + (roy - py) ** 2);
+      if (d < bestDist) {
+        bestDist = d;
+        nx = cw ? -edy / len : edy / len;
+        ny = cw ? edx / len : -edx / len;
+      }
+    }
+  } else {
+    const dT = roy, dB = room.height - roy, dL = rox, dR = room.width - rox;
+    bestDist = Math.min(dT, dB, dL, dR);
+    if (bestDist === dT)      { nx = 0; ny = 1; }
+    else if (bestDist === dB) { nx = 0; ny = -1; }
+    else if (bestDist === dL) { nx = 1; ny = 0; }
+    else                      { nx = -1; ny = 0; }
+  }
+
+  if (bestDist > 0.3) {
+    if (radar.height > radar.width * 1.2) {
+      nx = rox < room.width / 2 ? 1 : -1; ny = 0;
+    } else if (radar.width > radar.height * 1.2) {
+      nx = 0; ny = roy < room.height / 2 ? 1 : -1;
+    }
+  }
+
+  return { nx, ny };
+}
+
 export function getEffectiveDims(obj: RoomObject) {
   const r = (obj.rotation * Math.PI) / 180;
   const c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));

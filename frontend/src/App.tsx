@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
-import { OBJECT_PRESETS } from './types';
+import { OBJECT_PRESETS, getRadarFacing } from './types';
 import { RoomEditor } from './components/RoomEditor';
 import { ObjectPalette } from './components/ObjectPalette';
 import { PropertiesPanel } from './components/PropertiesPanel';
@@ -11,62 +11,71 @@ import { FLOOR_PLAN_ROOMS } from './floorPlanData';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
 
-// Feature flags
-const DEFAULT_FEATURES: Record<string, string[]> = {
-  bed:    ['state_machine','out_of_bed_alerts','on_bed-toss','journey_mapping_time_taken','state_machine_v2','state_machine_flickering','near_edge_alerts'],
-  door:   ['state_machine','out_of_room_alerts','journey_mapping_time_taken'],
-  window: [],
-  radar:  [],
-  sofa:   ['state_machine','journey_mapping_time_taken'],
-  chair:  ['state_machine','journey_mapping_time_taken'],
-  table:  [],
-  desk:   [],
-  wardrobe: [],
-  cabinet:  [],
-  person:   [],
-  custom:   [],
-};
-
-const ALL_FEATURES = [
-  'state_machine','out_of_room_alerts','out_of_bed_alerts',
-  'on_bed-toss','journey_mapping_time_taken','state_machine_v2',
-  'state_machine_flickering','near_edge_alerts',
-];
-
-function buildConfig(objects: RoomObject[], board: string, location: string) {
+function buildConfig(objects: RoomObject[], board: string, location: string, room: RoomConfig) {
   const radar   = objects.find(o => o.type === 'radar');
   const originX = radar ? radar.x + radar.width  / 2 : 0;
   const originY = radar ? radar.y + radar.height / 2 : 0;
 
-  const serialized = objects.map(obj => {
-    const left   = +(obj.x            - originX).toFixed(3);
-    const right  = +(obj.x + obj.width - originX).toFixed(3);
-    const top    = +(originY - obj.y           ).toFixed(3);
-    const bottom = +(originY - (obj.y + obj.height)).toFixed(3);
-    return {
-      name:         obj.label.toLowerCase().replace(/\s+/g, '_'),
-      top_left:     [left,  top],
-      top_right:    [right, top],
-      bottom_left:  [left,  bottom],
-      bottom_right: [right, bottom],
+  // Radar facing direction → rotate coords into radar-local frame
+  // Config Y = forward (direction radar faces), Config X = lateral (right of radar)
+  const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
+  const right_x = -fwd_y, right_y = fwd_x;
+
+  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+  let doorIdx = 0;
+  const serialized = exportable.map(obj => {
+    // Transform all 4 room corners into radar-local coords, then take bounding box
+    const corners = [
+      [obj.x,             obj.y],
+      [obj.x + obj.width, obj.y],
+      [obj.x,             obj.y + obj.height],
+      [obj.x + obj.width, obj.y + obj.height],
+    ];
+    const transformed = corners.map(([rx, ry]) => {
+      const dx = rx - originX, dy = ry - originY;
+      return [+(dx * right_x + dy * right_y).toFixed(3), +(dx * fwd_x + dy * fwd_y).toFixed(3)];
+    });
+    const xs = transformed.map(c => c[0]), ys = transformed.map(c => c[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+    const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+    const entry: Record<string, unknown> = {
+      name,
+      top_left:     [minX, maxY],
+      top_right:    [maxX, maxY],
+      bottom_left:  [minX, minY],
+      bottom_right: [maxX, minY],
       margin_top:    obj.marginTop    ?? 0,
       margin_bottom: obj.marginBottom ?? 0,
       margin_left:   obj.marginLeft   ?? 0,
       margin_right:  obj.marginRight  ?? 0,
     };
+    if (obj.type === 'bed') {
+      entry.top_height    = 0.5;
+      entry.bottom_height = 0.5;
+      entry.right_width   = 0.5;
+      entry.left_width    = 0.5;
+    }
+    return entry;
   });
 
-  const result: Record<string, unknown> = {
+  const names     = serialized.map(o => o.name as string);
+  const bedNames  = names.filter(n => n === 'bed');
+  const doorNames = names.filter(n => n.startsWith('door'));
+
+  return {
     device_configs: { board, location },
     objects: serialized,
+    state_machine:               { objects: names },
+    out_of_room_alerts:          { objects: doorNames },
+    out_of_bed_alerts:           { objects: bedNames },
+    'on_bed-toss':               { objects: bedNames },
+    journey_mapping_time_taken:  { objects: names },
+    state_machine_v2:            { objects: bedNames },
+    state_machine_flickering:    { objects: bedNames },
+    near_edge_alerts:            { objects: bedNames },
   };
-  for (const feature of ALL_FEATURES) {
-    const names = objects
-      .filter(o => (DEFAULT_FEATURES[o.type] ?? []).includes(feature))
-      .map(o => o.label.toLowerCase().replace(/\s+/g, '_'));
-    if (names.length > 0) result[feature] = { objects: names };
-  }
-  return result;
 }
 
 // ── Per-tab state ─────────────────────────────────────────────────────────────
@@ -211,7 +220,7 @@ export default function App() {
 
   function handleExportConfirm(board: string, location: string) {
     setShowExport(false);
-    const config = buildConfig(objects, board, location);
+    const config = buildConfig(objects, board, location, room);
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
