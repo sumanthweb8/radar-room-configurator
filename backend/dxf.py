@@ -410,6 +410,6 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
             y=round(max(0.0, y_local), 3),
             width=round(w_m, 3),
             height=round(h_m, 3),
-            rotation=rotation,
+            rotation=0,
         ))
     return objects
