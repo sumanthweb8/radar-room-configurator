@@ -64,6 +64,52 @@ _ASSET_TYPE_MAP = {
 BBox = Tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
 
 
+def _simplify_polygon(
+    pts: List[Tuple[float, float]], room_w: float, room_h: float,
+    snap_tol: float = 0.02, collinear_tol: float = 0.01,
+) -> List[Tuple[float, float]]:
+    """
+    Clean up a raw DXF polygon:
+      1. Snap near-zero and near-edge values to exact 0 / room_w / room_h
+      2. Remove collinear points (on the same straight line)
+      3. Remove near-duplicate consecutive points
+    """
+    # 1. Snap to room edges
+    snapped = []
+    for x, y in pts:
+        if abs(x) < snap_tol:
+            x = 0.0
+        elif abs(x - room_w) < snap_tol:
+            x = round(room_w, 3)
+        if abs(y) < snap_tol:
+            y = 0.0
+        elif abs(y - room_h) < snap_tol:
+            y = round(room_h, 3)
+        snapped.append((round(x, 3), round(y, 3)))
+
+    # 2. Remove near-duplicate consecutive points
+    deduped: List[Tuple[float, float]] = [snapped[0]]
+    for p in snapped[1:]:
+        if abs(p[0] - deduped[-1][0]) > snap_tol or abs(p[1] - deduped[-1][1]) > snap_tol:
+            deduped.append(p)
+
+    # 3. Remove collinear points (point B on line A→C)
+    if len(deduped) < 4:
+        return deduped
+    cleaned: List[Tuple[float, float]] = []
+    n = len(deduped)
+    for i in range(n):
+        a = deduped[(i - 1) % n]
+        b = deduped[i]
+        c = deduped[(i + 1) % n]
+        # Cross product magnitude — 0 means collinear
+        cross = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        if cross > collinear_tol:
+            cleaned.append(b)
+
+    return cleaned if len(cleaned) >= 3 else deduped
+
+
 def _shoelace_area(pts: List[Tuple[float, float]]) -> float:
     """Absolute area of a polygon via the shoelace formula."""
     n = len(pts)
@@ -118,7 +164,7 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
         poly_area = _shoelace_area(poly_local)
         bbox_area = room_w_m * room_h_m
         if poly_area < bbox_area * 0.95:
-            polygon = poly_local
+            polygon = _simplify_polygon(poly_local, room_w_m, room_h_m)
 
     name = _extract_room_name(ms) or "Room"
     openings = _collect_openings(ms, wall_bbox)
@@ -260,6 +306,7 @@ def _collect_openings(ms, wall_bbox: BBox) -> List[RoomObject]:
         label = (e.dxf.text or "").strip()
         annotations.append(((float(ins.x), float(ins.y)), label))
 
+    room_w_m = rx1 - rx0
     objects: List[RoomObject] = []
     for i, (ox0, oy0, ox1, oy1) in enumerate(deduped, start=1):
         w_m = ox1 - ox0
@@ -267,14 +314,17 @@ def _collect_openings(ms, wall_bbox: BBox) -> List[RoomObject]:
         # Room-local top-left corner (Y flipped: top of room = highest DXF y)
         x_local = ox0 - rx0
         y_local = room_h_m - (oy1 - ry0)
+        # Clamp so openings that extend past the room edge stay inside
+        x_local = max(0.0, min(x_local, room_w_m - w_m))
+        y_local = max(0.0, min(y_local, room_h_m - h_m))
         cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label_text = _nearest_annotation(annotations, (cx, cy)) or "Opening"
         obj_type = _opening_type_from_label(label_text)
         objects.append(RoomObject(
             type=obj_type,
             label=label_text,
-            x=round(max(0.0, x_local), 3),
-            y=round(max(0.0, y_local), 3),
+            x=round(x_local, 3),
+            y=round(y_local, 3),
             width=round(w_m, 3),
             height=round(h_m, 3),
         ))
@@ -352,6 +402,7 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
         obj_type = _ASSET_TYPE_MAP.get(label.strip().lower(), "custom")
         x_local = ox0 - rx0
         y_local = room_h_m - (oy1 - ry0)
+
         objects.append(RoomObject(
             type=obj_type,
             label=label,
@@ -359,5 +410,6 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
             y=round(max(0.0, y_local), 3),
             width=round(w_m, 3),
             height=round(h_m, 3),
+            rotation=rotation,
         ))
     return objects

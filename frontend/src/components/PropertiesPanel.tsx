@@ -229,17 +229,35 @@ export const PropertiesPanel: React.FC<Props> = ({
           <p style={{ fontSize: 9, color: textSm, marginTop: 4, fontFamily: 'monospace' }}>{(obj.width * obj.height).toFixed(2)} m²</p>
         </Section>
 
-        <Section title="Rotation" textSm={textSm}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4, marginBottom: 10 }}>
-            {[0, 90, 180, 270].map(deg => (
-              <button key={deg} onClick={() => onUpdate({ rotation: deg })}
-                style={{ padding: '5px 0', borderRadius: 8, fontSize: 11, fontWeight: 500, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
-                  background:   obj.rotation === deg ? obj.color  : inputBg,
-                  borderColor:  obj.rotation === deg ? obj.color  : inputBorder,
-                  color:        obj.rotation === deg ? '#fff'     : textSm,
-                }}>{deg}°</button>
-            ))}
-          </div>
+        <Section title={obj.type === 'bed' || obj.type === 'sofa' ? 'Facing' : 'Rotation'} textSm={textSm}>
+          {(obj.type === 'bed' || obj.type === 'sofa') ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4, marginBottom: 10 }}>
+              {([
+                { deg: 0,   label: '↑ Top' },
+                { deg: 90,  label: '→ Right' },
+                { deg: 180, label: '↓ Bottom' },
+                { deg: 270, label: '← Left' },
+              ] as const).map(({ deg, label }) => (
+                <button key={deg} onClick={() => onUpdate({ rotation: deg })}
+                  style={{ padding: '5px 0', borderRadius: 8, fontSize: 10, fontWeight: 500, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+                    background:   obj.rotation === deg ? obj.color  : inputBg,
+                    borderColor:  obj.rotation === deg ? obj.color  : inputBorder,
+                    color:        obj.rotation === deg ? '#fff'     : textSm,
+                  }}>{label}</button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4, marginBottom: 10 }}>
+              {[0, 90, 180, 270].map(deg => (
+                <button key={deg} onClick={() => onUpdate({ rotation: deg })}
+                  style={{ padding: '5px 0', borderRadius: 8, fontSize: 11, fontWeight: 500, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+                    background:   obj.rotation === deg ? obj.color  : inputBg,
+                    borderColor:  obj.rotation === deg ? obj.color  : inputBorder,
+                    color:        obj.rotation === deg ? '#fff'     : textSm,
+                  }}>{deg}°</button>
+              ))}
+            </div>
+          )}
           <input type="range" min={0} max={359} step={1} value={obj.rotation}
             onChange={e => onUpdate({ rotation: +e.target.value })}
             style={{ width: '100%', accentColor: obj.color }} />

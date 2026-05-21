@@ -70,25 +70,25 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
     label: 'Sample 3',
     area: '16.25 m²',
     config: {
-      name: 'Morris bedroom', width: 5.78, height: 3.53,
+      name: 'Morris bedroom', width: 5.763, height: 3.523,
       polygon: [
         [0, 0],         // top-left
-        [5.76, 0],      // top-right
-        [5.76, 3.52],   // bottom-right
-        [2.22, 3.52],   // bottom at step
-        [2.22, 1.73],   // inner corner
-        [0, 1.73],      // left wall at step
+        [5.763, 0],     // top-right
+        [5.763, 3.523], // bottom-right
+        [2.224, 3.523], // bottom at step
+        [2.224, 1.725], // inner corner
+        [0, 1.725],     // left wall at step
       ],
     },
     objects: [
-      o('mb_radar','radar',  'KC',              2.22, 1.87, 0.05, 0.23),
-      o('mb_bed',  'bed',    'Bed',             3.69, 1.25, 2.07, 1.63),
-      o('mb_tv',   'custom', 'Television',      2.40, 2.18, 0.08, 0.87),
-      o('mb_sg',   'cabinet','Storage',         2.22, 2.11, 0.52, 0.88),
-      o('mb_tbl',  'table',  'Table',           4.93, 2.95, 0.83, 0.57),
-      o('mb_d1',   'door',   'Door area',       3.55, 0.00, 1.70, 0.25),
-      o('mb_w1',   'window', 'Window area',     4.06, 3.28, 0.81, 0.25),
-      o('mb_w2',   'window', 'Window area',     3.14, 3.28, 0.78, 0.25),
+      o('mb_radar','radar',  'KC',              2.224, 1.871, 0.046, 0.234),
+      o('mb_bed',  'bed',    'Bed',             3.690, 1.249, 2.072, 1.631),
+      o('mb_tv',   'custom', 'Television',      2.395, 2.176, 0.080, 0.872),
+      o('mb_sg',   'cabinet','Storage',         2.224, 2.111, 0.518, 0.877),
+      o('mb_tbl',  'table',  'Table',           4.933, 2.952, 0.830, 0.571),
+      o('mb_d1',   'door',   'Door area',       3.549, 0.000, 1.699, 0.250),
+      o('mb_w1',   'window', 'Window area',     4.056, 3.273, 0.814, 0.250),
+      o('mb_w2',   'window', 'Window area',     3.140, 3.273, 0.782, 0.250),
     ],
   },
 ];

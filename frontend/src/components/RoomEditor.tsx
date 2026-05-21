@@ -32,64 +32,81 @@ function clamp(obj: RoomObject, nx: number, ny: number, rw: number, rh: number) 
 
 // ── SVG object shapes ─────────────────────────────────────────────────────────
 
-function BedShape({ w, h }: { w: number; h: number; color: string }) {
-  // Architectural floor-plan style — clean black outlines, white fill
-  const sw      = 1.8;                        // stroke width
-  const stroke  = '#1a1a1a';
-  const fill    = '#ffffff';
-  const headH   = Math.min(h * 0.22, 32);    // headboard thickness
-  const footH   = Math.min(h * 0.07, 10);    // footboard thickness
-  const frameW  = Math.min(w * 0.035, 5);    // side rail width
-  const padX    = frameW;
-  const innerW  = w - frameW * 2;
-  const pilH    = Math.min(headH * 0.9, 26);
-  const pilW    = innerW * 0.42;
-  const pilGap  = (innerW - pilW * 2) / 3;
-  const pilY    = headH + Math.min(6, h * 0.03);
-  const bodyY   = headH;
-  const bodyH   = h - headH - footH;
+function BedShape({ w, h, facing = 0 }: { w: number; h: number; color: string; facing?: number }) {
+  // Architectural floor-plan style. `facing` places the headboard/pillows
+  // at the specified edge WITHOUT moving the bed bounding box.
+  const sw     = 1.8;
+  const stroke = '#1a1a1a';
+  const isVert = facing === 0 || facing === 180; // headboard on top/bottom edge
+  // Headboard thickness adapts to which edge it sits on
+  const headT  = isVert ? Math.min(h * 0.18, 28) : Math.min(w * 0.18, 28);
+  const footT  = isVert ? Math.min(h * 0.06, 8)  : Math.min(w * 0.06, 8);
+  const pilT   = Math.min(headT * 0.85, 22); // pillow thickness (toward room)
+  const pilLen = isVert ? w * 0.38 : h * 0.38; // pillow length (along edge)
+  const gap    = 4; // gap between headboard and pillows
+
+  // Compute headboard rect, pillow positions, fold line, and footboard
+  // based on which edge the headboard is on.
+  let headRect: { x: number; y: number; w: number; h: number };
+  let footRect: { x: number; y: number; w: number; h: number };
+  let pils: { x: number; y: number; w: number; h: number }[];
+  let fold: { x1: number; y1: number; x2: number; y2: number };
+  const edgeLen = isVert ? w : h; // length along the headboard edge
+  const pilGap  = (edgeLen - pilLen * 2) / 3;
+
+  if (facing === 0) { // headboard at top
+    headRect = { x: 0, y: 0, w, h: headT };
+    footRect = { x: 0, y: h - footT, w, h: footT };
+    const py = headT + gap;
+    pils = [
+      { x: pilGap, y: py, w: pilLen, h: pilT },
+      { x: pilGap * 2 + pilLen, y: py, w: pilLen, h: pilT },
+    ];
+    fold = { x1: 0, y1: py + pilT + gap, x2: w, y2: py + pilT + gap };
+  } else if (facing === 180) { // headboard at bottom
+    headRect = { x: 0, y: h - headT, w, h: headT };
+    footRect = { x: 0, y: 0, w, h: footT };
+    const py = h - headT - gap - pilT;
+    pils = [
+      { x: pilGap, y: py, w: pilLen, h: pilT },
+      { x: pilGap * 2 + pilLen, y: py, w: pilLen, h: pilT },
+    ];
+    fold = { x1: 0, y1: py - gap, x2: w, y2: py - gap };
+  } else if (facing === 90) { // headboard at right
+    headRect = { x: w - headT, y: 0, w: headT, h };
+    footRect = { x: 0, y: 0, w: footT, h };
+    const px = w - headT - gap - pilT;
+    pils = [
+      { x: px, y: pilGap, w: pilT, h: pilLen },
+      { x: px, y: pilGap * 2 + pilLen, w: pilT, h: pilLen },
+    ];
+    fold = { x1: px - gap, y1: 0, x2: px - gap, y2: h };
+  } else { // 270 — headboard at left
+    headRect = { x: 0, y: 0, w: headT, h };
+    footRect = { x: w - footT, y: 0, w: footT, h };
+    const px = headT + gap;
+    pils = [
+      { x: px, y: pilGap, w: pilT, h: pilLen },
+      { x: px, y: pilGap * 2 + pilLen, w: pilT, h: pilLen },
+    ];
+    fold = { x1: px + pilT + gap, y1: 0, x2: px + pilT + gap, y2: h };
+  }
 
   return (
     <g>
-      {/* ── White background ── */}
-      <rect x={0} y={0} width={w} height={h} fill={fill} rx={2} />
-
-      {/* ── Side rails ── */}
-      <rect x={0}          y={headH} width={frameW} height={bodyH} fill="#e8e8e8" stroke={stroke} strokeWidth={sw * 0.6} />
-      <rect x={w - frameW} y={headH} width={frameW} height={bodyH} fill="#e8e8e8" stroke={stroke} strokeWidth={sw * 0.6} />
-
-      {/* ── Mattress area (inner) ── */}
-      <rect x={frameW} y={bodyY} width={innerW} height={bodyH} fill="#f8f8f8" />
-
-      {/* ── Pillows ── */}
-      {[padX + pilGap, padX + pilGap * 2 + pilW].map((px, i) => (
-        <g key={i}>
-          <rect x={px} y={pilY} width={pilW} height={pilH} fill="#ffffff" stroke={stroke} strokeWidth={sw} rx={3} />
-          {/* pillow centre crease */}
-          <line x1={px + pilW / 2} y1={pilY + 3} x2={px + pilW / 2} y2={pilY + pilH - 3}
-            stroke="#cccccc" strokeWidth={0.8} />
-        </g>
+      <rect x={0} y={0} width={w} height={h} fill="#ffffff" rx={2} />
+      <rect x={0} y={0} width={w} height={h} fill="#f8f8f8" rx={2} />
+      {/* Headboard */}
+      <rect x={headRect.x} y={headRect.y} width={headRect.w} height={headRect.h} fill="#2a2a2a" rx={2} />
+      {/* Footboard */}
+      <rect x={footRect.x} y={footRect.y} width={footRect.w} height={footRect.h} fill="#2a2a2a" rx={1} />
+      {/* Pillows */}
+      {pils.map((p, i) => (
+        <rect key={i} x={p.x} y={p.y} width={p.w} height={p.h} fill="#ffffff" stroke={stroke} strokeWidth={sw} rx={3} />
       ))}
-
-      {/* ── Blanket fold line (horizontal line separating pillows from body) ── */}
-      <line
-        x1={frameW} y1={pilY + pilH + Math.min(6, h * 0.03)}
-        x2={w - frameW} y2={pilY + pilH + Math.min(6, h * 0.03)}
-        stroke={stroke} strokeWidth={sw * 0.7}
-      />
-
-      {/* ── Headboard (solid thick rect) ── */}
-      <rect x={0} y={0} width={w} height={headH} fill="#2a2a2a" rx={2} />
-      {/* Headboard inner recess panel */}
-      <rect x={frameW + 2} y={3} width={innerW - 4} height={headH - 6} fill="#3d3d3d" rx={1} />
-      {/* Headboard top highlight */}
-      <line x1={frameW + 4} y1={5} x2={w - frameW - 4} y2={5}
-        stroke="rgba(255,255,255,0.12)" strokeWidth={1.5} strokeLinecap="round" />
-
-      {/* ── Footboard ── */}
-      <rect x={0} y={h - footH} width={w} height={footH} fill="#2a2a2a" rx={1} />
-
-      {/* ── Outer border ── */}
+      {/* Fold line */}
+      <line x1={fold.x1} y1={fold.y1} x2={fold.x2} y2={fold.y2} stroke={stroke} strokeWidth={sw * 0.7} />
+      {/* Outer border */}
       <rect x={0} y={0} width={w} height={h} fill="none" stroke={stroke} strokeWidth={sw} rx={2} />
     </g>
   );
@@ -325,7 +342,7 @@ function ObjectShape({ obj, scale }: { obj: RoomObject; scale: number }) {
   const { color, type } = obj;
   const { emoji } = OBJECT_PRESETS[type];
   switch (type) {
-    case 'bed':     return <BedShape     w={w} h={h} color={color} />;
+    case 'bed':     return <BedShape     w={w} h={h} color={color} facing={obj.rotation} />;
     case 'sofa':    return <SofaShape    w={w} h={h} color={color} />;
     case 'door':    return <DoorShape    w={w} h={h} color={color} />;
     case 'window':  return <WindowShape  w={w} h={h} color={color} />;
@@ -779,7 +796,7 @@ export const RoomEditor: React.FC<Props> = ({ room, objects, selectedId, onSelec
 
           return (
             <g key={obj.id}
-              transform={`rotate(${obj.rotation}, ${cx}, ${cy})`}
+              transform={obj.type === 'bed' ? undefined : `rotate(${obj.rotation}, ${cx}, ${cy})`}
               style={{ cursor: 'grab' }}
               onPointerDown={e => handlePointerDown(e, obj.id)}
               onClick={e => e.stopPropagation()}

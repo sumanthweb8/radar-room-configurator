@@ -26,27 +26,58 @@ function addTo(g: THREE.Group, obj: THREE.Object3D, x: number, y: number, z: num
 }
 
 // ── BED ───────────────────────────────────────────────────────────────────────
-function makeBed(w: number, d: number): THREE.Group {
+function makeBed(w: number, d: number, facing: number = 0): THREE.Group {
   const g = new THREE.Group();
   const legH = 0.15, frameH = 0.12, mattH = 0.20, headH = 0.55, footH = 0.25;
   const frameTop = legH + frameH;
+
+  // Frame + mattress + legs — always fixed
   addTo(g, box(w, legH + frameH, d, 0x5c3d1e, 0.8), 0, (legH + frameH) / 2, d / 2);
   addTo(g, box(w - 0.06, mattH, d - 0.06, 0xf0ede8, 0.9), 0, frameTop + mattH / 2, d / 2);
-  const beddingLen = (d - 0.06) * 0.55;
-  addTo(g, box(w - 0.1, mattH + 0.04, beddingLen, 0x7fa8cc, 0.9), 0, frameTop + mattH / 2, d / 2 + (d - 0.06) * 0.225);
-  const pilW = (w - 0.2) / 2, pilH = 0.08, pilD = Math.min(0.5, d * 0.15);
-  const pilY = frameTop + mattH + pilH / 2, pilZ = pilD / 2 + 0.04;
-  addTo(g, box(pilW, pilH, pilD, 0xffffff, 0.95), -(pilW / 2 + 0.02), pilY, pilZ);
-  addTo(g, box(pilW, pilH, pilD, 0xffffff, 0.95),  (pilW / 2 + 0.02), pilY, pilZ);
-  addTo(g, box(w, headH, 0.08, 0x3b2510, 0.7), 0, legH + headH / 2, 0.04);
-  addTo(g, box(w - 0.1, headH - 0.1, 0.03, 0x4e3218, 0.7), 0, legH + headH / 2, 0.09);
-  addTo(g, box(w, footH, 0.07, 0x3b2510, 0.7), 0, legH + footH / 2, d - 0.035);
   const legR = 0.025;
-  const cyl = (r: number, h: number, col: number) => {
-    const m2 = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 10), new THREE.MeshStandardMaterial({ color: col, roughness: 0.7 }));
+  const cyl = (r: number, h2: number, col: number) => {
+    const m2 = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h2, 10), new THREE.MeshStandardMaterial({ color: col, roughness: 0.7 }));
     m2.castShadow = true; return m2;
   };
   [[-w/2+0.05,0.05],[w/2-0.05,0.05],[-w/2+0.05,d-0.05],[w/2-0.05,d-0.05]].forEach(([lx,lz]) => addTo(g, cyl(legR, legH, 0x2a1a08), lx, legH/2, lz));
+
+  // Headboard, footboard, pillows, bedding — positioned by facing.
+  // facing=0: headboard at z=0 (back), facing=90: headboard at +x, facing=180: z=d, facing=270: -x
+  const pilH2 = 0.08;
+  const pilY = frameTop + mattH + pilH2 / 2;
+
+  if (facing === 0 || facing === 180) {
+    const headZ = facing === 0 ? 0.04 : d - 0.04;
+    const footZ = facing === 0 ? d - 0.035 : 0.035;
+    const pilZ  = facing === 0 ? 0.04 + pilH2 : d - 0.04 - pilH2;
+    const bedZ  = facing === 0 ? d / 2 + (d - 0.06) * 0.225 : d / 2 - (d - 0.06) * 0.225;
+    const pilW2 = (w - 0.2) / 2;
+    // Headboard
+    addTo(g, box(w, headH, 0.08, 0x3b2510, 0.7), 0, legH + headH / 2, headZ);
+    // Footboard
+    addTo(g, box(w, footH, 0.07, 0x3b2510, 0.7), 0, legH + footH / 2, footZ);
+    // Pillows
+    addTo(g, box(pilW2, pilH2, Math.min(0.5, d * 0.15), 0xffffff, 0.95), -(pilW2 / 2 + 0.02), pilY, pilZ);
+    addTo(g, box(pilW2, pilH2, Math.min(0.5, d * 0.15), 0xffffff, 0.95),  (pilW2 / 2 + 0.02), pilY, pilZ);
+    // Bedding
+    addTo(g, box(w - 0.1, mattH + 0.04, (d - 0.06) * 0.55, 0x7fa8cc, 0.9), 0, frameTop + mattH / 2, bedZ);
+  } else {
+    const headX = facing === 90 ? w / 2 - 0.04 : -w / 2 + 0.04;
+    const footX = facing === 90 ? -w / 2 + 0.035 : w / 2 - 0.035;
+    const pilX  = facing === 90 ? w / 2 - 0.04 - pilH2 : -w / 2 + 0.04 + pilH2;
+    const bedX  = facing === 90 ? -(w - 0.06) * 0.225 : (w - 0.06) * 0.225;
+    const pilD2 = (d - 0.2) / 2;
+    // Headboard (vertical, along depth)
+    addTo(g, box(0.08, headH, d, 0x3b2510, 0.7), headX, legH + headH / 2, d / 2);
+    // Footboard
+    addTo(g, box(0.07, footH, d, 0x3b2510, 0.7), footX, legH + footH / 2, d / 2);
+    // Pillows (along depth axis)
+    addTo(g, box(Math.min(0.5, w * 0.15), pilH2, pilD2, 0xffffff, 0.95), pilX, pilY, d / 2 - (pilD2 / 2 + 0.02));
+    addTo(g, box(Math.min(0.5, w * 0.15), pilH2, pilD2, 0xffffff, 0.95), pilX, pilY, d / 2 + (pilD2 / 2 + 0.02));
+    // Bedding
+    addTo(g, box((w - 0.06) * 0.55, mattH + 0.04, d - 0.1, 0x7fa8cc, 0.9), bedX, frameTop + mattH / 2, d / 2);
+  }
+
   return g;
 }
 
@@ -632,7 +663,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
       // ── All other furniture ───────────────────────────────────────────────
       let group: THREE.Group;
       switch (obj.type) {
-        case 'bed':      group = makeBed(w, d); break;
+        case 'bed':      group = makeBed(w, d, obj.rotation); break;
         case 'sofa':     group = makeSofa(w, d, color); break;
         case 'wardrobe': group = makeWardrobe(w, d); break;
         case 'table':    group = makeTable(w, d); break;
@@ -644,7 +675,8 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
       }
       const wrapper = new THREE.Group();
       wrapper.position.set(obj.x + w/2, 0, obj.y + d/2);
-      wrapper.rotation.y = -(obj.rotation * Math.PI) / 180;
+      // Beds handle facing internally — skip outer rotation
+      if (obj.type !== 'bed') wrapper.rotation.y = -(obj.rotation * Math.PI) / 180;
       group.position.set(0, 0, -d/2);
       wrapper.add(group);
       wrapper.traverse(c => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; c.receiveShadow = true; } });
