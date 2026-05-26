@@ -549,7 +549,7 @@ export default function App() {
                 })),
                 coverageTargets: kcroom.coverageTargets,
               };
-              const child = window.open(`${import.meta.env.BASE_URL}msim.html?t=${Date.now()}`, '_blank');
+              const child = window.open(`${import.meta.env.BASE_URL}simulator.html`, '_blank');
               if (child) {
                 const timer = setInterval(() => {
                   try { child.postMessage({ type: 'load-kcplan', payload: plan }, '*'); } catch { /* */ }
