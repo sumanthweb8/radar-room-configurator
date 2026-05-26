@@ -10,8 +10,11 @@ $Author=Metaroom in the sibling PDFs) and follow a fixed layer convention:
   • Other             : LWPOLYLINEs marking door/window cut-outs in walls
   • Measurement       : DIMENSION entities (group 42 = measurement in metres)
   • Space Annotation  : MTEXT room label, e.g. "Space\\PA. 13.50 m²\\PRH 2.51 m"
-  • Assets            : (file 1 only) furniture rectangles — *intentionally
-                        ignored* by this parser
+  • Assets            : furniture rectangles (Bed, Sofa, Table, …)
+  • Amrax Objects     : Metaroom-tagged devices placed in the room (e.g. an
+                        FDS Device wall-mounted near the TV). Footprints can
+                        be very thin (~1 cm) since they're sensors, so they
+                        use a smaller min-dim threshold than furniture.
 
 $INSUNITS = 6 → coordinates are in metres. We use them directly.
 
@@ -37,6 +40,8 @@ _ASSET_LAYERS   = {"assets"}
 _LABEL_LAYERS   = {"space annotation"}
 _OPENING_LABEL_LAYERS = {"other annotation"}
 _ASSET_LABEL_LAYERS   = {"assets annotation"}
+_AMRAX_OBJECT_LAYERS       = {"amrax objects"}
+_AMRAX_OBJECT_LABEL_LAYERS = {"amrax objects annotation"}
 
 # Asset-label → frontend ObjectType. Labels not listed here fall through to
 # 'custom' so the rectangle still imports — just with the generic shape.
@@ -55,7 +60,27 @@ _ASSET_TYPE_MAP = {
     "stove":    "custom",
     "oven":     "custom",
     "fridge":   "custom",
+    "television": "custom",
+    "tv":         "custom",
 }
+
+# Substring tokens that identify the Kubocare radar device. The DXF export
+# may tag it as "FDS", "FDS Device", "KC", "Kubocare radar", "Radar", etc. —
+# any label containing one of these tokens maps to the 'radar' type.
+_RADAR_LABEL_TOKENS = ("fds", "kubocare", "radar", "kc")
+
+
+def _asset_type_for_label(label: str) -> str:
+    s = label.strip().lower()
+    if not s:
+        return "custom"
+    if s in _ASSET_TYPE_MAP:
+        return _ASSET_TYPE_MAP[s]
+    # Word-boundary check so "kc" doesn't match "kitchen cabinet" etc.
+    tokens = re.findall(r"[a-z]+", s)
+    if any(tok in _RADAR_LABEL_TOKENS for tok in tokens):
+        return "radar"
+    return "custom"
 
 
 BBox = Tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
@@ -93,13 +118,20 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
 
     name = _extract_room_name(ms) or "Room"
     openings = _collect_openings(ms, wall_bbox)
-    assets = _collect_assets(ms, wall_bbox)
+    assets = _collect_assets(
+        ms, wall_bbox, _ASSET_LAYERS, _ASSET_LABEL_LAYERS, min_dim=0.05,
+    )
+    # Amrax Objects (e.g. FDS Device) are wall-mounted sensors with sub-cm
+    # footprints — use a tighter min-dim so they're not filtered as noise.
+    amrax = _collect_assets(
+        ms, wall_bbox, _AMRAX_OBJECT_LAYERS, _AMRAX_OBJECT_LABEL_LAYERS, min_dim=0.005,
+    )
 
     room = Room(
         name=name,
         width=round(room_w_m, 3),
         height=round(room_h_m, 3),
-        objects=openings + assets,
+        objects=openings + assets + amrax,
     )
     return MetaroomReport(floor=None, rooms=[room])
 
@@ -275,15 +307,22 @@ def _opening_type_from_label(label: str) -> str:
     return "custom"
 
 
-def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
+def _collect_assets(
+    ms,
+    wall_bbox: BBox,
+    shape_layers: set,
+    label_layers: set,
+    min_dim: float = 0.05,
+) -> List[RoomObject]:
     """
-    Walk LWPOLYLINEs on the `Assets` layer (furniture / fixtures in the
-    'complete' DXF variant) and emit one RoomObject per piece.
+    Walk LWPOLYLINEs on `shape_layers` and emit one RoomObject per piece,
+    labelling each via the nearest TEXT on `label_layers`.
 
     Same coordinate convention as openings: room-local, Y flipped to SVG
-    (origin top-left). Each rectangle's type comes from the nearest TEXT
-    on the `Assets Annotation` layer (Bed, Chair, Sink, …) — unknown
-    labels fall through to 'custom' so they still appear in the editor.
+    (origin top-left). Unknown labels fall through to 'custom' so they
+    still appear in the editor. `min_dim` filters out degenerate slivers
+    — set lower for thin sensor footprints (Amrax Objects), higher for
+    furniture (Assets).
     """
     rx0, ry0, rx1, ry1 = wall_bbox
     room_h_m = ry1 - ry0
@@ -292,14 +331,14 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
     for e in ms:
         if e.dxftype() != "TEXT":
             continue
-        if not _layer_matches(e.dxf.layer, _ASSET_LABEL_LAYERS):
+        if not _layer_matches(e.dxf.layer, label_layers):
             continue
         ins = e.dxf.insert
         annotations.append(((float(ins.x), float(ins.y)), (e.dxf.text or "").strip()))
 
     objects: List[RoomObject] = []
     for e in ms:
-        if not _layer_matches(e.dxf.layer, _ASSET_LAYERS):
+        if not _layer_matches(e.dxf.layer, shape_layers):
             continue
         if e.dxftype() != "LWPOLYLINE":
             continue
@@ -309,11 +348,11 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
         ox0, oy0, ox1, oy1 = bb
         w_m = ox1 - ox0
         h_m = oy1 - oy0
-        if w_m < 0.05 or h_m < 0.05:
+        if w_m < min_dim or h_m < min_dim:
             continue
         cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label = _nearest_annotation(annotations, (cx, cy)) or "Asset"
-        obj_type = _ASSET_TYPE_MAP.get(label.strip().lower(), "custom")
+        obj_type = _asset_type_for_label(label)
         x_local = ox0 - rx0
         y_local = room_h_m - (oy1 - ry0)
         objects.append(RoomObject(
