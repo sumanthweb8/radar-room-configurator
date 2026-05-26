@@ -5108,8 +5108,7 @@ window.addEventListener('resize', () => {
 // Restore visibility toggles first (so any restored autosave plan can
 // override individual flags via its ui.visibility block).
 restoreToggleState();
-// Skip auto-restore when opened from the configurator — postMessage will load the room
-if (!window.opener) restoreAutoSave();
+restoreAutoSave();
 // Persist the user's perspective-camera pan/zoom across refreshes (#100).
 // Restore AFTER restoreAutoSave (which calls fitView and would reset the
 // camera) so the saved state wins. suppressCameraSave gates the change-event
