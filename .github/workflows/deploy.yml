@@ -88,7 +88,7 @@ jobs:
               needs.deploy-backend.result == 'success' &&
               'SUCCESS' || 'FAILURE'
             }}
-          to: aravind@kubocare.com
+          to: sumanthweb8@gmail.com
           from: GitHub Actions <${{ secrets.MAIL_USERNAME }}>
           body: |
             Repository: ${{ github.repository }}
