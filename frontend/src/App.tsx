@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
 import { OBJECT_PRESETS, getRadarFacing } from './types';
 import { RoomEditor } from './components/RoomEditor';
@@ -10,6 +10,124 @@ import { ImportImageModal } from './components/ImportImageModal';
 import { FLOOR_PLAN_ROOMS } from './floorPlanData';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
+
+function buildKcroom(room: RoomConfig, objects: RoomObject[]) {
+  // Room boundary polygon (CCW)
+  const boundary: number[][] = room.polygon
+    ? room.polygon.map(p => [p[0], p[1]])
+    : [[0, 0], [room.width, 0], [room.width, room.height], [0, room.height]];
+
+  // Identify doors/windows on wall edges to create openings
+  const wallOpenings = new Map<number, { uStart: number; uEnd: number; vStart: number; vEnd: number }[]>();
+  const N = boundary.length;
+
+  for (const obj of objects) {
+    if (obj.type !== 'door' && obj.type !== 'window') continue;
+    const cx = obj.x + obj.width / 2;
+    const cy = obj.y + obj.height / 2;
+
+    let bestEdge = 0, bestDist = Infinity;
+    for (let i = 0; i < N; i++) {
+      const [ax, ay] = boundary[i];
+      const [bx, by] = boundary[(i + 1) % N];
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / len2));
+      const px = ax + t * dx, py = ay + t * dy;
+      const dist = Math.hypot(cx - px, cy - py);
+      if (dist < bestDist) { bestDist = dist; bestEdge = i; }
+    }
+
+    const [ax, ay] = boundary[bestEdge];
+    const [bx, by] = boundary[(bestEdge + 1) % N];
+    const edgeLen = Math.hypot(bx - ax, by - ay);
+    if (edgeLen < 0.01) continue;
+
+    const edgeDx = bx - ax, edgeDy = by - ay;
+    const corners = [
+      [obj.x, obj.y], [obj.x + obj.width, obj.y],
+      [obj.x, obj.y + obj.height], [obj.x + obj.width, obj.y + obj.height],
+    ];
+    const projections = corners.map(([px, py]) => ((px - ax) * edgeDx + (py - ay) * edgeDy) / edgeLen);
+    const uStart = Math.max(0, Math.min(...projections) / edgeLen);
+    const uEnd = Math.min(1, Math.max(...projections) / edgeLen);
+
+    const vStart = obj.type === 'door' ? 0 : 0.3;
+    const vEnd = obj.type === 'door' ? 0.85 : 0.8;
+
+    const arr = wallOpenings.get(bestEdge) ?? [];
+    arr.push({ uStart, uEnd, vStart, vEnd });
+    wallOpenings.set(bestEdge, arr);
+  }
+
+  const walls: { edgeIndex: number; openings: { uStart: number; uEnd: number; vStart: number; vEnd: number }[] }[] = [];
+  wallOpenings.forEach((openings, edgeIndex) => {
+    walls.push({ edgeIndex, openings });
+  });
+
+  const HEIGHT_MAP: Record<string, number> = {
+    bed: 0.55, table: 0.75, desk: 0.75, chair: 0.45,
+    sofa: 0.85, cabinet: 1.2, wardrobe: 2.0, custom: 0.6,
+    door: 2.1,
+  };
+
+  const furnitureObjects = objects
+    .filter(o => o.type !== 'window' && o.type !== 'radar')
+    .map(obj => ({
+      type: obj.type,
+      name: obj.label,
+      footprint: [
+        [obj.x, obj.y],
+        [obj.x + obj.width, obj.y],
+        [obj.x + obj.width, obj.y + obj.height],
+        [obj.x, obj.y + obj.height],
+      ],
+      height: HEIGHT_MAP[obj.type] ?? 0.5,
+      yBase: 0,
+    }));
+
+  // Compute radar device placement — exact position + facing direction
+  const radarDevices: { id: string; freePosition: { x: number; y: number; facingX: number; facingY: number }; tiltDeg: number }[] = [];
+  for (const obj of objects) {
+    if (obj.type !== 'radar') continue;
+    const cx = obj.x + obj.width / 2;
+    const cy = obj.y + obj.height / 2;
+    const facing = getRadarFacing(obj, room);
+    radarDevices.push({
+      id: obj.id,
+      freePosition: { x: +cx.toFixed(4), y: +cy.toFixed(4), facingX: facing.nx, facingY: facing.ny },
+      tiltDeg: -45,
+    });
+  }
+
+  // Coverage targets: key points on beds and doors that radars must see
+  const coverageTargets: { type: string; label: string; points: number[][] }[] = [];
+  for (const obj of objects) {
+    if (obj.type !== 'bed' && obj.type !== 'door') continue;
+    const pts: number[][] = [
+      [obj.x + obj.width / 2, obj.y + obj.height / 2],
+      [obj.x, obj.y], [obj.x + obj.width, obj.y],
+      [obj.x, obj.y + obj.height], [obj.x + obj.width, obj.y + obj.height],
+    ];
+    coverageTargets.push({ type: obj.type, label: obj.label, points: pts });
+  }
+
+  return {
+    name: room.name || 'Room',
+    schemaVersion: 1,
+    units: 'metres',
+    devices: radarDevices,
+    coverageTargets,
+    rooms: [{
+      id: 'room-1',
+      name: room.name || 'Room',
+      boundary,
+      ceilingHeight: 3.0,
+      walls,
+      objects: furnitureObjects,
+    }],
+  };
+}
 
 function buildConfig(objects: RoomObject[], board: string, location: string, room: RoomConfig) {
   const radar   = objects.find(o => o.type === 'radar');
@@ -46,10 +164,10 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
       top_right:    [maxX, maxY],
       bottom_left:  [minX, minY],
       bottom_right: [maxX, minY],
-      margin_top:    obj.marginTop    ?? 0,
-      margin_bottom: obj.marginBottom ?? 0,
-      margin_left:   obj.marginLeft   ?? 0,
-      margin_right:  obj.marginRight  ?? 0,
+      margin_top:    obj.marginTop    ?? 0.3,
+      margin_bottom: obj.marginBottom ?? 0.3,
+      margin_left:   obj.marginLeft   ?? 0.3,
+      margin_right:  obj.marginRight  ?? 0.3,
     };
     if (obj.type === 'bed') {
       entry.top_height    = 0.5;
@@ -60,6 +178,65 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
     return entry;
   });
 
+  // Clamp margins so detection zones never overlap between objects
+  const MARGIN_THRESH = 0.3 * 2;
+  const clampedPairs: string[] = [];
+  const objBounds = serialized.map(o => {
+    const tl = o.top_left as number[], tr = o.top_right as number[], bl = o.bottom_left as number[];
+    return { minX: tl[0], maxX: tr[0], minY: bl[1], maxY: tl[1] };
+  });
+  for (let i = 0; i < serialized.length; i++) {
+    const a = serialized[i];
+    const ai = objBounds[i];
+    for (let j = i + 1; j < serialized.length; j++) {
+      const b = serialized[j];
+      const bj = objBounds[j];
+      const yNear = (ai.minY - MARGIN_THRESH) < bj.maxY && (bj.minY - MARGIN_THRESH) < ai.maxY;
+      const xNear = (ai.minX - MARGIN_THRESH) < bj.maxX && (bj.minX - MARGIN_THRESH) < ai.maxX;
+
+      // Horizontal: A right ↔ B left
+      if (bj.minX >= ai.maxX && yNear) {
+        const gap = bj.minX - ai.maxX;
+        const half = Math.max(0, +(gap / 2).toFixed(3));
+        if ((a.margin_right as number) + (b.margin_left as number) > gap) {
+          a.margin_right = Math.min(a.margin_right as number, half);
+          b.margin_left  = Math.min(b.margin_left  as number, half);
+          clampedPairs.push(`${a.name} ↔ ${b.name} (horizontal gap ${gap.toFixed(2)}m)`);
+        }
+      }
+      // Horizontal: B right ↔ A left
+      if (ai.minX >= bj.maxX && yNear) {
+        const gap = ai.minX - bj.maxX;
+        const half = Math.max(0, +(gap / 2).toFixed(3));
+        if ((b.margin_right as number) + (a.margin_left as number) > gap) {
+          b.margin_right = Math.min(b.margin_right as number, half);
+          a.margin_left  = Math.min(a.margin_left  as number, half);
+          clampedPairs.push(`${b.name} ↔ ${a.name} (horizontal gap ${gap.toFixed(2)}m)`);
+        }
+      }
+      // Vertical: A top ↔ B bottom
+      if (bj.minY >= ai.maxY && xNear) {
+        const gap = bj.minY - ai.maxY;
+        const half = Math.max(0, +(gap / 2).toFixed(3));
+        if ((a.margin_top as number) + (b.margin_bottom as number) > gap) {
+          a.margin_top    = Math.min(a.margin_top    as number, half);
+          b.margin_bottom = Math.min(b.margin_bottom as number, half);
+          clampedPairs.push(`${a.name} ↔ ${b.name} (vertical gap ${gap.toFixed(2)}m)`);
+        }
+      }
+      // Vertical: B top ↔ A bottom
+      if (ai.minY >= bj.maxY && xNear) {
+        const gap = ai.minY - bj.maxY;
+        const half = Math.max(0, +(gap / 2).toFixed(3));
+        if ((b.margin_top as number) + (a.margin_bottom as number) > gap) {
+          b.margin_top    = Math.min(b.margin_top    as number, half);
+          a.margin_bottom = Math.min(a.margin_bottom as number, half);
+          clampedPairs.push(`${b.name} ↔ ${a.name} (vertical gap ${gap.toFixed(2)}m)`);
+        }
+      }
+    }
+  }
+
   const names     = serialized.map(o => o.name as string);
   const bedNames  = names.filter(n => n === 'bed');
   const doorNames = names.filter(n => n.startsWith('door'));
@@ -67,6 +244,7 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
   return {
     device_configs: { board, location },
     objects: serialized,
+    _clampedMargins: clampedPairs,
     state_machine:               { objects: names },
     out_of_room_alerts:          { objects: doorNames },
     out_of_bed_alerts:           { objects: bedNames },
@@ -111,6 +289,27 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [dark,       setDark]       = useState(true);
+  const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
+
+  // ── Listen for radar placements from mSIM ──────────────────────────────────
+  useEffect(() => {
+    function onMessage(ev: MessageEvent) {
+      if (ev.data && ev.data.type === 'msim-place-radar' && ev.data.position) {
+        const { x, y } = ev.data.position;
+        const preset = OBJECT_PRESETS['radar'];
+        const obj: RoomObject = {
+          id: genId(), type: 'radar', label: `Radar ${ev.data.index ?? ''}`.trim(),
+          x: x - preset.defaultWidth / 2, y: y - preset.defaultHeight / 2,
+          width: preset.defaultWidth, height: preset.defaultHeight,
+          color: preset.color, rotation: 0,
+          marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+        };
+        setTabs(prev => prev.map((t, i) => i === activeIdx ? { ...t, objects: [...t.objects, obj], selectedId: obj.id } : t));
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [activeIdx]);
 
   // ── Helpers to patch the active tab ────────────────────────────────────────
   function patchTab(patch: Partial<TabState>) {
@@ -122,6 +321,18 @@ export default function App() {
   const selectedObject = objects.find(o => o.id === selectedId) ?? null;
   const radarObj       = objects.find(o => o.type === 'radar')  ?? null;
 
+  // Detect margin overlaps whenever objects change (from import, add, move, etc.)
+  const [exportPreview, setExportPreview] = useState<Record<string, unknown>[] | null>(null);
+  useEffect(() => {
+    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+    if (exportable.length < 2) { setMarginAlert(null); setExportPreview(null); return; }
+    const config = buildConfig(objects, '<board>', room.name || '', room) as any;
+    const clamped: string[] = config._clampedMargins || [];
+    delete config._clampedMargins;
+    setExportPreview(config.objects || []);
+    setMarginAlert(clamped.length > 0 ? clamped : null);
+  }, [objects, room]);
+
   // ── Object handlers (all scoped to active tab) ──────────────────────────────
   function handleAdd(type: ObjectType) {
     const p = OBJECT_PRESETS[type];
@@ -131,7 +342,10 @@ export default function App() {
       y: Math.max(0, (room.height - p.defaultHeight) / 2),
       width: p.defaultWidth, height: p.defaultHeight,
       color: p.color, rotation: 0,
-      marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+      marginTop: 0,
+      marginBottom: type === 'bed' ? 0.5 : 0,
+      marginLeft: type === 'bed' ? 0.5 : 0,
+      marginRight: type === 'bed' ? 0.5 : 0,
     };
     patchTab({ objects: [...objects, obj], selectedId: obj.id });
   }
@@ -160,9 +374,9 @@ export default function App() {
         height: +(o.height ?? preset.defaultHeight),
         color: preset.color, rotation: o.rotation ?? 0,
         marginTop:    +(o.marginTop    ?? 0),
-        marginBottom: +(o.marginBottom ?? 0),
-        marginLeft:   +(o.marginLeft   ?? 0),
-        marginRight:  +(o.marginRight  ?? 0),
+        marginBottom: +(o.marginBottom ?? (type === 'bed' ? 0.5 : 0)),
+        marginLeft:   +(o.marginLeft   ?? (type === 'bed' ? 0.5 : 0)),
+        marginRight:  +(o.marginRight  ?? (type === 'bed' ? 0.5 : 0)),
       };
     });
   }
@@ -220,7 +434,9 @@ export default function App() {
 
   function handleExportConfirm(board: string, location: string) {
     setShowExport(false);
-    const config = buildConfig(objects, board, location, room);
+    const config = buildConfig(objects, board, location, room) as any;
+    const clamped: string[] = config._clampedMargins || [];
+    delete config._clampedMargins;
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -228,6 +444,7 @@ export default function App() {
     a.download = `${board}_${tab.label.replace(/\s+/g,'_')}_config.json`;
     a.click();
     URL.revokeObjectURL(url);
+    if (clamped.length > 0) setMarginAlert(clamped);
   }
 
   function handleAddTab() {
@@ -269,6 +486,19 @@ export default function App() {
       {/* Gradient cap */}
       <div className="h-[2px] shrink-0" style={{ background: 'linear-gradient(90deg, #c8506b, #a03050, #c8506b)' }} />
 
+      {marginAlert && (
+        <div style={{ background: 'rgba(234,179,8,0.15)', border: '1px solid rgba(234,179,8,0.4)', padding: '10px 16px', display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12, color: '#eab308', flexShrink: 0 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠</span>
+          <div style={{ flex: 1 }}>
+            <strong style={{ fontSize: 12 }}>Margins auto-adjusted to prevent overlap</strong>
+            <div style={{ marginTop: 4, color: dark ? '#a3a3a3' : '#737373', lineHeight: 1.5 }}>
+              {marginAlert.map((msg, i) => <div key={i}>{msg}</div>)}
+            </div>
+          </div>
+          <button onClick={() => setMarginAlert(null)} style={{ background: 'none', border: 'none', color: '#eab308', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1 }}>×</button>
+        </div>
+      )}
+
       {/* ── Header ── */}
       <header style={{ background: tabBarBg, borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', height: 52, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -309,6 +539,33 @@ export default function App() {
           <button onClick={() => setShow3D(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, background: dark ? 'rgba(6,182,212,0.1)' : 'rgba(6,182,212,0.08)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.25)', transition: 'all 0.15s' }}
           >⬡ 3D</button>
+
+          <button onClick={() => {
+              const kcroom = buildKcroom(room, objects);
+              const plan = {
+                room: { name: kcroom.name, schemaVersion: kcroom.schemaVersion, units: kcroom.units, rooms: kcroom.rooms },
+                devices: (kcroom.devices || []).map(d => ({
+                  id: d.id, roomId: 'room-1', freePosition: d.freePosition, tiltDeg: d.tiltDeg,
+                })),
+                coverageTargets: kcroom.coverageTargets,
+              };
+              const child = window.open(`${import.meta.env.BASE_URL}msim.html?t=${Date.now()}`, '_blank');
+              if (child) {
+                const timer = setInterval(() => {
+                  try { child.postMessage({ type: 'load-kcplan', payload: plan }, '*'); } catch { /* */ }
+                }, 300);
+                const onAck = (ev: MessageEvent) => {
+                  if (ev.data && ev.data.type === 'kcroom-ack') {
+                    clearInterval(timer);
+                    window.removeEventListener('message', onAck);
+                  }
+                };
+                window.addEventListener('message', onAck);
+                setTimeout(() => { clearInterval(timer); window.removeEventListener('message', onAck); }, 10000);
+              }
+            }} disabled={objects.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 18px', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', boxShadow: objects.length > 0 ? '0 3px 14px rgba(168,85,247,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
+          >▶ Simulate</button>
 
           <button onClick={() => setShowExport(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(99,102,241,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
@@ -439,7 +696,7 @@ export default function App() {
       )}
 
       {showExport && (
-        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} />
+        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} objectsPreview={exportPreview} marginWarnings={marginAlert} />
       )}
     </div>
   );

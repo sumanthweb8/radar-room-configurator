@@ -53,6 +53,8 @@ _ASSET_TYPE_MAP = {
     "kc2":      "radar",
     "kc 2":     "radar",
     "radar":    "radar",
+    "fds":      "radar",
+    "fds device": "radar",
     "toilet":   "custom",
     "sink":     "custom",
     "bathtub":  "custom",
@@ -396,12 +398,20 @@ def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
         ox0, oy0, ox1, oy1 = bb
         w_m = ox1 - ox0
         h_m = oy1 - oy0
-        if w_m < 0.03 or h_m < 0.03:
+        if w_m < 0.005 and h_m < 0.005:
             continue
         cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label = _nearest_annotation(annotations, (cx, cy)) or "Asset"
         key = label.strip().lower()
         obj_type = _ASSET_TYPE_MAP.get(key) or _ASSET_TYPE_MAP.get(key.split()[0], "custom")
+        # Radar devices may have tiny DXF geometry — use default 0.08m size centered on original
+        if obj_type == "radar" and (w_m < 0.03 or h_m < 0.03):
+            w_m = 0.08
+            h_m = 0.08
+            ox0 = cx - 0.04
+            oy1 = cy + 0.04
+        elif w_m < 0.03 or h_m < 0.03:
+            continue
         x_local = ox0 - rx0
         y_local = room_h_m - (oy1 - ry0)
 

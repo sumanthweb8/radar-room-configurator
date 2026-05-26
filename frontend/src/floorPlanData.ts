@@ -91,4 +91,21 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
       o('mb_w2',   'window', 'Window area',     3.140, 3.273, 0.782, 0.250),
     ],
   },
+  {
+    id: 'fortis_bannerghatta',
+    label: 'Sample 4',
+    area: '14.41 m²',
+    config: { name: 'Fortis Bannerghatta', width: 3.976, height: 3.625 },
+    objects: [
+      o('fb_radar','radar',   'FDS Device',     2.039, 3.283, 0.08, 0.08),
+      o('fb_bed',  'bed',     'Bed',            1.597, 0.077, 1.026, 2.205),
+      o('fb_sofa', 'sofa',    'Sofa',           0.000, 0.000, 0.905, 1.865),
+      o('fb_tbl',  'table',   'Table',          0.000, 2.191, 0.731, 1.112),
+      o('fb_sg1',  'cabinet', 'Storage',        0.871, 0.034, 0.518, 0.511),
+      o('fb_sg2',  'cabinet', 'Storage',        3.199, 0.000, 0.610, 0.485),
+      o('fb_tv',   'custom',  'Television',     1.602, 3.508, 0.888, 0.117),
+      o('fb_d1',   'door',    'Door area',      3.726, 2.163, 0.250, 1.401),
+      o('fb_w1',   'window',  'Window area',    0.000, 0.898, 0.250, 1.621),
+    ],
+  },
 ];
