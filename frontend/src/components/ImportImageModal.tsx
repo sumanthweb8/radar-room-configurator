@@ -6,25 +6,6 @@ interface Props {
   onCancel: () => void;
 }
 
-// Convert any image file (including HEIC on Safari/Mac) to a JPEG blob via canvas
-async function toJpegBlob(file: File): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      canvas.toBlob(b => b ? resolve(b) : reject(new Error('Canvas toBlob failed')), 'image/jpeg', 0.92);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image failed to load — try exporting as PNG/JPG from Preview')); };
-    img.src = url;
-  });
-}
-
 const MANUAL_LAYOUT = {
   room: { name: 'Room', width: 5.2, height: 4.64 },
   objects: [
@@ -40,11 +21,9 @@ const MANUAL_LAYOUT = {
 
 export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) => {
   const [file,     setFile]     = useState<File | null>(null);
-  const [preview,  setPreview]  = useState<string | null>(null);
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const inputRef    = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const dxfInputRef = useRef<HTMLInputElement>(null);
 
@@ -59,14 +38,12 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
   const isDxf = (f: File) => /\.dxf$/i.test(f.name);
 
   function pickFile(f: File) {
+    if (!isPdf(f) && !isDxf(f)) {
+      setError('Unsupported file. Please choose a Metaroom PDF or a DXF file.');
+      return;
+    }
     setFile(f);
     setError(null);
-    if (isPdf(f) || isDxf(f)) {
-      setPreview(null); // no image preview for PDFs/DXFs
-    } else {
-      const url = URL.createObjectURL(f);
-      setPreview(url);
-    }
   }
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -82,46 +59,19 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
     setError(null);
     try {
       const form = new FormData();
-
       const API = import.meta.env.VITE_API_BASE ?? '';
+      const endpoint = isDxf(file) ? '/api/import-dxf' : '/api/import-metaroom';
 
-      if (isDxf(file)) {
-        // ── DXF path ──────────────────────────────────────────────────────
-        form.append('file', file);
-        const res = await fetch(`${API}/api/import-dxf`, { method: 'POST', body: form });
-        if (!res.ok) {
-          const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
-          throw new Error(detail);
-        }
-        const data = await res.json();
-        if (data.rooms && data.rooms.length > 0) {
-          onImport({ rooms: data.rooms } as any);
-        }
-      } else if (isPdf(file)) {
-        // ── Metaroom PDF path ──────────────────────────────────────────────
-        form.append('file', file);
-        const res = await fetch(`${API}/api/import-metaroom`, { method: 'POST', body: form });
-        if (!res.ok) {
-          const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
-          throw new Error(detail);
-        }
-        const data = await res.json();
-        // Pass the full multi-room payload — App.tsx will create one tab per room
-        if (data.rooms && data.rooms.length > 0) {
-          onImport({ rooms: data.rooms } as any);
-        }
-      } else {
-        // ── Image path (Claude vision) — returns same rooms[] format ──────
-        const jpeg = await toJpegBlob(file);
-        form.append('file', new File([jpeg], 'upload.jpg', { type: 'image/jpeg' }));
-        const res = await fetch(`${API}/api/import-image`, { method: 'POST', body: form });
-        if (!res.ok) {
-          const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
-          throw new Error(detail);
-        }
-        const data = await res.json();
-        // Both PDF and image now return { rooms: [...] }
-        onImport(data.rooms ? data : { rooms: [data] });
+      form.append('file', file);
+      const res = await fetch(`${API}${endpoint}`, { method: 'POST', body: form });
+      if (!res.ok) {
+        const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      // Pass the full multi-room payload — App.tsx will create one tab per room
+      if (data.rooms && data.rooms.length > 0) {
+        onImport({ rooms: data.rooms } as any);
       }
     } catch (e: any) {
       console.error('Import error:', e);
@@ -130,8 +80,6 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
       setLoading(false);
     }
   }
-
-  const hasApiCreditsError = error?.toLowerCase().includes('credit') || error?.toLowerCase().includes('billing');
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}>
@@ -142,24 +90,13 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
           <div style={{ width: 38, height: 38, borderRadius: 11, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🗺</div>
           <div>
             <p style={{ fontSize: 14, fontWeight: 700, color: textMd, margin: 0 }}>Import Floor Plan</p>
-            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Upload an image, Metaroom PDF, or DXF to extract the layout</p>
+            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Upload a Metaroom PDF or DXF to extract the layout</p>
           </div>
           <button onClick={onCancel} style={{ marginLeft: 'auto', width: 26, height: 26, borderRadius: 7, background: 'transparent', border: `1px solid ${inputBorder}`, cursor: 'pointer', color: textSm, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
         </div>
 
-        {/* Two picker buttons side by side */}
+        {/* Picker buttons side by side */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-          <button
-            onClick={() => inputRef.current?.click()}
-            style={{
-              flex: 1, padding: '10px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
-              border: `1px solid ${inputBorder}`, background: dropBg,
-              color: textMd, fontSize: 12, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-            }}
-          >
-            🖼 Browse Image
-          </button>
           <button
             onClick={() => pdfInputRef.current?.click()}
             style={{
@@ -185,8 +122,6 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
         </div>
 
         {/* Hidden inputs */}
-        <input ref={inputRef} type="file" accept="image/*,.heic,.heif" style={{ display: 'none' }}
-          onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
         <input ref={pdfInputRef} type="file" accept=".pdf" style={{ display: 'none' }}
           onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
         <input ref={dxfInputRef} type="file" accept=".dxf" style={{ display: 'none' }}
@@ -204,9 +139,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
             minHeight: 90, transition: 'all 0.15s', overflow: 'hidden', padding: 8,
           }}
         >
-          {preview ? (
-            <img src={preview} alt="preview" style={{ maxWidth: '100%', maxHeight: 180, objectFit: 'contain', display: 'block' }} />
-          ) : file && isDxf(file) ? (
+          {file && isDxf(file) ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
               <div style={{ fontSize: 32 }}>📐</div>
               <p style={{ fontSize: 12, fontWeight: 600, color: '#34d399', margin: 0 }}>{file.name}</p>
@@ -219,16 +152,14 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
               <p style={{ fontSize: 10, color: textSm, margin: 0 }}>Metaroom PDF · {(file.size / 1024).toFixed(0)} KB — ready to import</p>
             </div>
           ) : (
-            <p style={{ fontSize: 11, color: textSm, margin: 0 }}>or drag & drop a file here</p>
+            <p style={{ fontSize: 11, color: textSm, margin: 0 }}>or drag & drop a PDF or DXF here</p>
           )}
         </div>
 
         {/* Error */}
         {error && (
           <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', fontSize: 11, lineHeight: 1.6 }}>
-            {hasApiCreditsError
-              ? <>No API credits. Add credits at <strong>console.anthropic.com/settings/billing</strong> — or use the button below.</>
-              : error}
+            {error}
           </div>
         )}
 
@@ -236,7 +167,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
         {loading && (
           <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #6366f1', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>{file && isDxf(file) ? 'Parsing DXF file…' : file && isPdf(file) ? 'Parsing Metaroom PDF…' : 'Claude is reading and placing every room & object…'}</p>
+            <p style={{ fontSize: 12, color: '#818cf8', margin: 0 }}>{file && isDxf(file) ? 'Parsing DXF file…' : 'Parsing Metaroom PDF…'}</p>
           </div>
         )}
 
@@ -254,7 +185,7 @@ export const ImportImageModal: React.FC<Props> = ({ dark, onImport, onCancel }) 
               fontSize: 12, fontWeight: 700, cursor: (!file || loading) ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit', transition: 'all 0.15s',
             }}>
-            {loading ? (file && isDxf(file) ? 'Parsing DXF…' : file && isPdf(file) ? 'Parsing…' : 'Extracting…') : '✦ Extract & Import'}
+            {loading ? 'Parsing…' : '✦ Import'}
           </button>
         </div>
 

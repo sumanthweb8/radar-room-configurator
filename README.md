@@ -1,29 +1,44 @@
-# Floor Plan → 3D
+# Radar Room Configurator
 
-Internal tool: upload a floor plan image → get a correctable 2D wall model → render in 3D.
+Lay out a room in 2D, place radar devices and furniture, preview it in 3D, and
+export a device configuration. Floor plans can be imported from **Metaroom by
+Amrax PDFs** or **DXF** drawings, or built by hand.
 
 ---
 
 ## Architecture
 
 ```
-floor-plan-tool/
-├── backend/
-│   ├── detection.py   # Layer 1 — OpenCV pipeline
-│   ├── geometry.py    # Layer 2 — Geometry engine (core)
-│   ├── models.py      # Pydantic data models
-│   ├── main.py        # FastAPI server
-│   └── requirements.txt
-└── frontend/
+radar-room-configurator/
+├── backend/                      # FastAPI — two offline floor-plan importers
+│   ├── main.py                   # API server (health, import-metaroom, import-dxf)
+│   ├── metaroom.py               # Metaroom PDF → rooms + objects
+│   ├── dxf.py                    # ASCII DXF → rooms + objects
+│   ├── requirements.txt
+│   ├── Dockerfile                # Cloud Run image
+│   └── tests/                    # pytest: test_metaroom.py, test_dxf.py
+└── frontend/                     # React + Vite + TypeScript + Three.js
+    ├── public/
+    │   ├── floorplans/           # Sample PDFs used by FloorPlanViewer
+    │   └── simulator.html        # Standalone Kubocare Radar Simulator (3D)
     └── src/
-        ├── App.tsx                     # Root — upload / 2D / 3D views
-        ├── api.ts                      # Typed fetch wrappers
-        ├── geometry/types.ts           # Shared TS types
+        ├── App.tsx               # Root — tabs, 2D editor, 3D view
+        ├── api.ts                # importDxf() fetch wrapper
+        ├── floorPlanData.ts      # Static sample room data
+        ├── types.ts              # Shared TS types
         └── components/
-            ├── WallEditor.tsx          # SVG interactive editor
-            ├── ThreeDView.tsx          # Three.js renderer
-            └── Toolbar.tsx             # Mode + scale controls
+            ├── RoomEditor.tsx        # 2D layout editor
+            ├── Room3DViewer.tsx      # Three.js 3D renderer
+            ├── FloorPlanViewer.tsx   # Sample floor-plan PDF viewer
+            ├── ObjectPalette.tsx     # Furniture / device palette
+            ├── PropertiesPanel.tsx   # Selected-object properties
+            ├── ImportImageModal.tsx  # Import PDF / DXF / manual layout
+            └── ExportModal.tsx       # Device-config export
 ```
+
+> **Note:** the legacy OpenCV / OCR / Claude-vision sketch-detection pipeline
+> (`/api/analyze`, `/api/import-image`, `/api/refine`) has been removed. Imports
+> now go exclusively through the Metaroom-PDF and DXF parsers.
 
 ---
 
@@ -46,59 +61,52 @@ npm install
 npm run dev             # → http://localhost:5173
 ```
 
-Open http://localhost:5173 and drop a floor-plan image onto the page.
+Point the frontend at the backend with `VITE_API_BASE` (defaults to same-origin):
 
----
-
-## Geometry engine pipeline (geometry.py)
-
-| Step | What it does | Key config |
-|------|-------------|------------|
-| 1. normalize | Consistent orientation; drop zero-length | — |
-| 2. snap_angles | Rotate to nearest 0°/45°/90°/135° | `angle_snap_threshold` (15°) |
-| 3. filter_short | Drop segments < threshold | `min_segment_length` (20 px) |
-| 4. merge_collinear | Fuse fragments of same wall | `collinear_distance_threshold` (6 px) |
-| 5. merge_parallel | Collapse double-line thick walls | `parallel_merge_distance` (12 px) |
-| 6. snap_to_grid | Quantise endpoints | `grid_size` (5 px) |
-| 7. compute_intersections | Parametric segment–segment | — |
-| 8. snap_intersections | Union-find cluster → centroid | `intersection_snap_distance` (8 px) |
-| 9. split_at_intersections | Cut segments at T/X junctions | — |
-| 10. build_graph | Adjacency list for rooms | — |
-| 11. detect_rooms | Shapely polygonize (DFS fallback) | `min_room_area_px2` (2000) |
-
-All constants are in `GeometryConfig` — pass overrides via the `/api/analyze` form fields.
+```bash
+VITE_API_BASE=http://localhost:8000 npm run dev
+```
 
 ---
 
 ## API
 
-### POST /api/analyze
-- Body: `multipart/form-data` — `file` (image) + optional config overrides
-- Response: `{ floor_plan: FloorPlan, debug_image?: string }`
+| Method | Endpoint               | Purpose                                            |
+|--------|------------------------|----------------------------------------------------|
+| GET    | `/api/health`          | Liveness check                                     |
+| POST   | `/api/import-metaroom` | Parse a Metaroom by Amrax PDF → `{ floor, rooms }` |
+| POST   | `/api/import-dxf`      | Parse an ASCII DXF → `{ floor, rooms }`            |
 
-### POST /api/refine
-- Body: JSON `FloorPlan` (after user edits)
-- Response: updated `FloorPlan` with re-computed rooms
-
----
-
-## 2D editor controls
-
-| Action | How |
-|--------|-----|
-| Pan | Middle-mouse drag |
-| Zoom | Scroll wheel |
-| Select wall | Click (Select mode) |
-| Move endpoint | Drag handle (Select mode) |
-| Draw new wall | Click start, click end (Draw mode) |
-| Delete wall | Click wall (Delete mode) **or** select + Del key |
-| Cancel draw | Esc |
-| Set scale | Click reference wall → type real-world metres |
+Both importers return the same shape: a `rooms[]` array where each entry has a
+`room` (name + dimensions, optional `polygon`) and an `objects[]` list (type,
+label, position, size, rotation).
 
 ---
 
-## 3D view
+## Testing
 
-- Walls extruded to **3 m** height.
-- Scale: `1 / floorPlan.scale` converts pixels → metres (set via 2D scale tool).
-- Orbit: left-drag to rotate, right-drag to pan, scroll to zoom.
+```bash
+# Backend
+cd backend && python -m pytest
+
+# Frontend
+cd frontend
+npm test            # vitest unit tests
+npm run test:e2e    # Playwright end-to-end tests
+```
+
+---
+
+## Deployment
+
+CI is defined in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+and runs on every push to `main`:
+
+- **Frontend** → GitHub Pages (`npm run build:gh-pages`), built with the
+  `VITE_API_BASE` secret.
+- **Backend** → Google Cloud Run (`gcloud run deploy radar-room-backend
+  --source .`), using the `backend/Dockerfile`.
+- A status email is sent after both jobs finish.
+
+For local container builds, `backend/Dockerfile` and `frontend/Dockerfile`
+(served via `frontend/nginx.conf`) are provided.
