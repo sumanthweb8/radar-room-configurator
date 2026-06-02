@@ -44,21 +44,42 @@ radar-room-configurator/
 
 ## Quick start
 
+> Linux/macOS commands. Use `python3` / `pip3` (on most Linux machines plain
+> `python` is not installed).
+
 ### Backend
+
+**One-time setup** — create the virtualenv and install dependencies:
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python main.py          # → http://localhost:8000
+python3 -m venv .venv
+source .venv/bin/activate
+pip3 install -r requirements.txt
+```
+
+**Every subsequent run** — just activate the existing venv and start the server:
+
+```bash
+cd backend
+source .venv/bin/activate
+python3 main.py          # → http://localhost:8000
 ```
 
 ### Frontend
 
+**One-time setup** — install dependencies:
+
 ```bash
 cd frontend
 npm install
-npm run dev             # → http://localhost:5173
+```
+
+**Every subsequent run**:
+
+```bash
+cd frontend
+npm run dev              # → http://localhost:5173
 ```
 
 Point the frontend at the backend with `VITE_API_BASE` (defaults to same-origin):
@@ -86,8 +107,8 @@ label, position, size, rotation).
 ## Testing
 
 ```bash
-# Backend
-cd backend && python -m pytest
+# Backend (activate the venv first: source .venv/bin/activate)
+cd backend && python3 -m pytest
 
 # Frontend
 cd frontend
