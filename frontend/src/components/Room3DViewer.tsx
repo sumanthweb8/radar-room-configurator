@@ -1,13 +1,31 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RoomConfig, RoomObject } from "../types";
+import { getRadarFacing } from "../types";
+import {
+  buildTargets, targetCoverage, avatarCoverage,
+  computeSuggestedPositions,
+  type SimRadar, type SimAvatar, type Suggestion, type Posture, type CoverageLevel,
+} from "../sim/coverage";
+import {
+  buildFovConeMesh, buildFloorFootprint, buildAvatarMesh, buildSuggestionMarker,
+} from "../sim/fovMesh";
 
 interface Props {
   room: RoomConfig;
   objects: RoomObject[];
   onClose: () => void;
+  /** When true, render the radar FOV cone + coverage and show sim panels. */
+  simulate?: boolean;
+  /** Called when a suggestion marker is clicked — adds a radar to the room. */
+  onAddRadar?: (pos: { x: number; y: number }) => void;
 }
+
+const LEVEL_COLOR: Record<CoverageLevel, string> = {
+  full: "#22c55e", partial: "#eab308", none: "#ef4444",
+};
+let _avatarSeq = 0;
 
 function hexToInt(hex: string): number {
   return parseInt(hex.replace("#", ""), 16);
@@ -349,8 +367,40 @@ function isTV(obj: RoomObject): boolean {
 }
 
 // ── MAIN COMPONENT ────────────────────────────────────────────────────────────
-export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
+export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate = false, onAddRadar }) => {
   const mountRef = useRef<HTMLDivElement>(null);
+  const camStateRef = useRef<{ pos: number[]; target: number[] } | null>(null);
+  const [avatars, setAvatars] = useState<SimAvatar[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+
+  // Radars reduced to the plan-space form the coverage math needs.
+  const simRadars = useMemo<SimRadar[]>(() =>
+    objects.filter(o => o.type === "radar").map(o => {
+      const f = getRadarFacing(o, room);
+      return { x: o.x + o.width / 2, y: o.y + o.height / 2, facingX: f.nx, facingY: f.ny, tiltDeg: -45 };
+    }), [objects, room]);
+
+  // Live coverage readout (cheap, pure) for the panel.
+  const readout = useMemo(() => {
+    const targets = buildTargets(objects);
+    return {
+      targets: targets.map(t => ({ label: t.label, type: t.type, level: targetCoverage(t, simRadars, room) })),
+      avatars: avatars.map(a => ({ id: a.id, posture: a.posture, level: avatarCoverage(a, simRadars, room) })),
+    };
+  }, [objects, room, simRadars, avatars]);
+
+  function addAvatar() {
+    setAvatars(prev => [...prev, { id: `av-${++_avatarSeq}`, x: room.width / 2, y: room.height / 2, posture: "stand", yawDeg: 0 }]);
+  }
+  function patchAvatar(id: string, patch: Partial<SimAvatar>) {
+    setAvatars(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+  }
+  function removeAvatar(id: string) {
+    setAvatars(prev => prev.filter(a => a.id !== id));
+  }
+  function runSuggest() {
+    setSuggestions(computeSuggestedPositions(room, buildTargets(objects)));
+  }
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -386,6 +436,11 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
     controls.minDistance = 0.5;
     controls.maxDistance = 80;
     controls.maxPolarAngle = Math.PI / 2 - 0.01;
+    // Preserve the user's camera across rebuilds (avatar/suggestion changes).
+    if (camStateRef.current) {
+      camera.position.fromArray(camStateRef.current.pos);
+      controls.target.fromArray(camStateRef.current.target);
+    }
     controls.update();
 
     // Lights
@@ -582,6 +637,22 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
 
       // ── Radar (wall or frame mounted, 45° tilt, wedge coverage) ──────────
       if (obj.type === 'radar') {
+        // Simulation mode: real elliptical FOV cone (footprint added after loop).
+        if (simulate) {
+          const f = getRadarFacing(obj, room);
+          const sr: SimRadar = { x: obj.x + w / 2, y: obj.y + d / 2, facingX: f.nx, facingY: f.ny, tiltDeg: -45 };
+          const device = makeRadarDevice();
+          device.position.set(sr.x, 2.40, sr.y);
+          device.rotation.y = Math.atan2(sr.facingX, sr.facingY);
+          device.traverse(c => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; } });
+          scene.add(device);
+          scene.add(buildFovConeMesh(sr));
+          const glow = new THREE.PointLight(0x9b59b6, 0.7, 3.5);
+          glow.position.set(sr.x, 2.40, sr.y);
+          scene.add(glow);
+          continue;
+        }
+
         const MOUNT_H = 2.2;   // height on wall (m)
         const RANGE   = 4.0;   // forward coverage (m)
         const SIDE    = 2.0;   // lateral coverage each side (m)
@@ -697,6 +768,54 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
       scene.add(wrapper);
     }
 
+    // ── Simulation overlays (footprint, avatars, suggestion markers) ────────
+    const suggestionMeshes: THREE.Mesh[] = [];
+    let onPointerDown: ((e: PointerEvent) => void) | null = null;
+    let onPointerUp: ((e: PointerEvent) => void) | null = null;
+    if (simulate) {
+      const footprint = buildFloorFootprint(simRadars, room);
+      if (footprint) scene.add(footprint);
+
+      for (const a of avatars) {
+        const level = avatarCoverage(a, simRadars, room);
+        const av = buildAvatarMesh(a.posture, level);
+        av.position.set(a.x, 0, a.y);
+        av.rotation.y = -a.yawDeg * Math.PI / 180;
+        scene.add(av);
+      }
+
+      suggestions.forEach((s, i) => {
+        const marker = buildSuggestionMarker(s.score, i);
+        marker.position.set(s.x, 0.04, s.y);
+        scene.add(marker);
+        suggestionMeshes.push(marker);
+      });
+
+      // Click a suggestion marker → add a radar there (distinguished from orbit drag).
+      if (suggestionMeshes.length && onAddRadar) {
+        const raycaster = new THREE.Raycaster();
+        let downX = 0, downY = 0;
+        onPointerDown = (e) => { downX = e.clientX; downY = e.clientY; };
+        onPointerUp = (e) => {
+          if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // was a drag
+          const rect = renderer.domElement.getBoundingClientRect();
+          const ndc = new THREE.Vector2(
+            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            -((e.clientY - rect.top) / rect.height) * 2 + 1,
+          );
+          raycaster.setFromCamera(ndc, camera);
+          const hit = raycaster.intersectObjects(suggestionMeshes, false)[0];
+          if (hit) {
+            const idx = hit.object.userData.index as number;
+            const s = suggestions[idx];
+            if (s) { onAddRadar({ x: s.x, y: s.y }); setSuggestions([]); }
+          }
+        };
+        renderer.domElement.addEventListener('pointerdown', onPointerDown);
+        renderer.domElement.addEventListener('pointerup', onPointerUp);
+      }
+    }
+
     // Animate
     let animId: number;
     const animate = () => { animId = requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
@@ -709,10 +828,13 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
     ro.observe(mount);
 
     return () => {
+      camStateRef.current = { pos: camera.position.toArray(), target: controls.target.toArray() };
+      if (onPointerDown) renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      if (onPointerUp) renderer.domElement.removeEventListener('pointerup', onPointerUp);
       cancelAnimationFrame(animId); ro.disconnect(); controls.dispose(); renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
-  }, [objects, room]);
+  }, [objects, room, simulate, simRadars, avatars, suggestions, onAddRadar]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(6px)' }}>
@@ -723,8 +845,8 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>⬡</div>
             <div>
-              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>3D Room View</p>
-              <p style={{ margin: 0, fontSize: 10, color: '#475569' }}>{room.width}m × {room.height}m · {objects.length} objects · drag to rotate · scroll to zoom</p>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{simulate ? 'Radar Simulation' : '3D Room View'}</p>
+              <p style={{ margin: 0, fontSize: 10, color: '#475569' }}>{room.width}m × {room.height}m · {objects.length} objects{simulate ? ' · FOV 108°×44° · 4m range' : ' · drag to rotate · scroll to zoom'}</p>
             </div>
           </div>
           <button onClick={onClose} style={{ padding: '5px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#94a3b8', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', transition: 'all 0.15s' }}
@@ -734,7 +856,113 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
         </div>
 
         <div ref={mountRef} style={{ flex: 1, width: '100%' }} />
+
+        {simulate && <SimPanels
+          readout={readout} avatars={avatars} suggestions={suggestions}
+          onSuggest={runSuggest} onClearSuggest={() => setSuggestions([])}
+          onAddAvatar={addAvatar} onPatchAvatar={patchAvatar} onRemoveAvatar={removeAvatar}
+          room={room} hasTargets={readout.targets.length > 0}
+        />}
       </div>
     </div>
   );
 };
+
+// ── Simulation side panels ──────────────────────────────────────────────────
+const Chip: React.FC<{ level: CoverageLevel }> = ({ level }) => (
+  <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '2px 7px', borderRadius: 99, color: '#fff', background: LEVEL_COLOR[level] }}>{level}</span>
+);
+
+interface SimPanelsProps {
+  readout: { targets: { label: string; type: string; level: CoverageLevel }[]; avatars: { id: string; posture: Posture; level: CoverageLevel }[] };
+  avatars: SimAvatar[];
+  suggestions: Suggestion[];
+  room: RoomConfig;
+  hasTargets: boolean;
+  onSuggest: () => void;
+  onClearSuggest: () => void;
+  onAddAvatar: () => void;
+  onPatchAvatar: (id: string, patch: Partial<SimAvatar>) => void;
+  onRemoveAvatar: (id: string) => void;
+}
+
+const panelBox: React.CSSProperties = {
+  background: 'rgba(8,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)',
+  borderRadius: 12, padding: 12, width: 246, backdropFilter: 'blur(4px)',
+};
+const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '4px 0' };
+const numInput: React.CSSProperties = { width: 46, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '2px 5px' };
+
+const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, room, hasTargets, onSuggest, onClearSuggest, onAddAvatar, onPatchAvatar, onRemoveAvatar }) => (
+  <div style={{ position: 'absolute', top: 70, right: 16, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'calc(93vh - 90px)', overflowY: 'auto' }}>
+    {/* Coverage readout */}
+    <div style={panelBox}>
+      <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Coverage</p>
+      {!hasTargets && <p style={{ margin: 0, fontSize: 10, color: '#64748b' }}>Add a bed or door to measure coverage.</p>}
+      {readout.targets.map((t, i) => (
+        <div key={i} style={rowStyle}>
+          <span style={{ fontSize: 11, color: '#cbd5e1' }}>{t.type === 'bed' ? '🛏' : '🚪'} {t.label}</span>
+          <Chip level={t.level} />
+        </div>
+      ))}
+      {readout.avatars.length > 0 && <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '6px 0' }} />}
+      {readout.avatars.map((a, i) => (
+        <div key={a.id} style={rowStyle}>
+          <span style={{ fontSize: 11, color: '#cbd5e1' }}>🧍 Avatar {i + 1} · {a.posture}</span>
+          <Chip level={a.level} />
+        </div>
+      ))}
+    </div>
+
+    {/* Suggest */}
+    <div style={panelBox}>
+      <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Suggest positions</p>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={onSuggest} disabled={!hasTargets}
+          style={{ flex: 1, padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: hasTargets ? 'pointer' : 'not-allowed', opacity: hasTargets ? 1 : 0.4, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', border: 'none' }}>
+          ✦ Suggest
+        </button>
+        {suggestions.length > 0 && (
+          <button onClick={onClearSuggest} style={{ padding: '6px 10px', borderRadius: 8, fontSize: 11, color: '#94a3b8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>Clear</button>
+        )}
+      </div>
+      {suggestions.length > 0 && <p style={{ margin: '8px 0 0', fontSize: 10, color: '#94a3b8' }}>{suggestions.length} spot{suggestions.length > 1 ? 's' : ''} — click a marker to place a radar.</p>}
+    </div>
+
+    {/* Avatars */}
+    <div style={panelBox}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Avatars</p>
+        <button onClick={onAddAvatar} style={{ padding: '4px 10px', borderRadius: 7, fontSize: 11, fontWeight: 700, color: '#34d399', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', cursor: 'pointer' }}>+ Add</button>
+      </div>
+      {avatars.length === 0 && <p style={{ margin: 0, fontSize: 10, color: '#64748b' }}>No avatars yet.</p>}
+      {avatars.map((a, i) => (
+        <div key={a.id} style={{ padding: '6px 0', borderTop: i ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+          <div style={rowStyle}>
+            <span style={{ fontSize: 11, color: '#cbd5e1' }}>Avatar {i + 1}</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <select value={a.posture} onChange={e => onPatchAvatar(a.id, { posture: e.target.value as Posture })}
+                style={{ ...numInput, width: 'auto' }}>
+                <option value="stand">Stand</option>
+                <option value="sit">Sit</option>
+                <option value="lie">Lie</option>
+              </select>
+              <button onClick={() => onRemoveAvatar(a.id)} style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13 }}>✕</button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'flex', alignItems: 'center', gap: 3 }}>x
+              <input type="number" step={0.1} min={0} max={room.width} value={a.x}
+                onChange={e => onPatchAvatar(a.id, { x: Math.max(0, Math.min(room.width, +e.target.value)) })} style={numInput} /></label>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'flex', alignItems: 'center', gap: 3 }}>y
+              <input type="number" step={0.1} min={0} max={room.height} value={a.y}
+                onChange={e => onPatchAvatar(a.id, { y: Math.max(0, Math.min(room.height, +e.target.value)) })} style={numInput} /></label>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'flex', alignItems: 'center', gap: 3 }}>yaw
+              <input type="number" step={15} value={a.yawDeg}
+                onChange={e => onPatchAvatar(a.id, { yawDeg: +e.target.value })} style={numInput} /></label>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);

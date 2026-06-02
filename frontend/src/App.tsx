@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
 import { OBJECT_PRESETS, getRadarFacing } from './types';
 import { RoomEditor } from './components/RoomEditor';
@@ -7,127 +7,8 @@ import { PropertiesPanel } from './components/PropertiesPanel';
 import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
 import { ImportImageModal } from './components/ImportImageModal';
-import { FLOOR_PLAN_ROOMS } from './floorPlanData';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
-
-function buildKcroom(room: RoomConfig, objects: RoomObject[]) {
-  // Room boundary polygon (CCW)
-  const boundary: number[][] = room.polygon
-    ? room.polygon.map(p => [p[0], p[1]])
-    : [[0, 0], [room.width, 0], [room.width, room.height], [0, room.height]];
-
-  // Identify doors/windows on wall edges to create openings
-  const wallOpenings = new Map<number, { uStart: number; uEnd: number; vStart: number; vEnd: number }[]>();
-  const N = boundary.length;
-
-  for (const obj of objects) {
-    if (obj.type !== 'door' && obj.type !== 'window') continue;
-    const cx = obj.x + obj.width / 2;
-    const cy = obj.y + obj.height / 2;
-
-    let bestEdge = 0, bestDist = Infinity;
-    for (let i = 0; i < N; i++) {
-      const [ax, ay] = boundary[i];
-      const [bx, by] = boundary[(i + 1) % N];
-      const dx = bx - ax, dy = by - ay;
-      const len2 = dx * dx + dy * dy;
-      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / len2));
-      const px = ax + t * dx, py = ay + t * dy;
-      const dist = Math.hypot(cx - px, cy - py);
-      if (dist < bestDist) { bestDist = dist; bestEdge = i; }
-    }
-
-    const [ax, ay] = boundary[bestEdge];
-    const [bx, by] = boundary[(bestEdge + 1) % N];
-    const edgeLen = Math.hypot(bx - ax, by - ay);
-    if (edgeLen < 0.01) continue;
-
-    const edgeDx = bx - ax, edgeDy = by - ay;
-    const corners = [
-      [obj.x, obj.y], [obj.x + obj.width, obj.y],
-      [obj.x, obj.y + obj.height], [obj.x + obj.width, obj.y + obj.height],
-    ];
-    const projections = corners.map(([px, py]) => ((px - ax) * edgeDx + (py - ay) * edgeDy) / edgeLen);
-    const uStart = Math.max(0, Math.min(...projections) / edgeLen);
-    const uEnd = Math.min(1, Math.max(...projections) / edgeLen);
-
-    const vStart = obj.type === 'door' ? 0 : 0.3;
-    const vEnd = obj.type === 'door' ? 0.85 : 0.8;
-
-    const arr = wallOpenings.get(bestEdge) ?? [];
-    arr.push({ uStart, uEnd, vStart, vEnd });
-    wallOpenings.set(bestEdge, arr);
-  }
-
-  const walls: { edgeIndex: number; openings: { uStart: number; uEnd: number; vStart: number; vEnd: number }[] }[] = [];
-  wallOpenings.forEach((openings, edgeIndex) => {
-    walls.push({ edgeIndex, openings });
-  });
-
-  const HEIGHT_MAP: Record<string, number> = {
-    bed: 0.55, table: 0.75, desk: 0.75, chair: 0.45,
-    sofa: 0.85, cabinet: 1.2, wardrobe: 2.0, custom: 0.6,
-    door: 2.1,
-  };
-
-  const furnitureObjects = objects
-    .filter(o => o.type !== 'window' && o.type !== 'radar')
-    .map(obj => ({
-      type: obj.type,
-      name: obj.label,
-      footprint: [
-        [obj.x, obj.y],
-        [obj.x + obj.width, obj.y],
-        [obj.x + obj.width, obj.y + obj.height],
-        [obj.x, obj.y + obj.height],
-      ],
-      height: HEIGHT_MAP[obj.type] ?? 0.5,
-      yBase: 0,
-    }));
-
-  // Compute radar device placement — exact position + facing direction
-  const radarDevices: { id: string; freePosition: { x: number; y: number; facingX: number; facingY: number }; tiltDeg: number }[] = [];
-  for (const obj of objects) {
-    if (obj.type !== 'radar') continue;
-    const cx = obj.x + obj.width / 2;
-    const cy = obj.y + obj.height / 2;
-    const facing = getRadarFacing(obj, room);
-    radarDevices.push({
-      id: obj.id,
-      freePosition: { x: +cx.toFixed(4), y: +cy.toFixed(4), facingX: facing.nx, facingY: facing.ny },
-      tiltDeg: -45,
-    });
-  }
-
-  // Coverage targets: key points on beds and doors that radars must see
-  const coverageTargets: { type: string; label: string; points: number[][] }[] = [];
-  for (const obj of objects) {
-    if (obj.type !== 'bed' && obj.type !== 'door') continue;
-    const pts: number[][] = [
-      [obj.x + obj.width / 2, obj.y + obj.height / 2],
-      [obj.x, obj.y], [obj.x + obj.width, obj.y],
-      [obj.x, obj.y + obj.height], [obj.x + obj.width, obj.y + obj.height],
-    ];
-    coverageTargets.push({ type: obj.type, label: obj.label, points: pts });
-  }
-
-  return {
-    name: room.name || 'Room',
-    schemaVersion: 1,
-    units: 'metres',
-    devices: radarDevices,
-    coverageTargets,
-    rooms: [{
-      id: 'room-1',
-      name: room.name || 'Room',
-      boundary,
-      ceilingHeight: 3.0,
-      walls,
-      objects: furnitureObjects,
-    }],
-  };
-}
 
 function buildConfig(objects: RoomObject[], board: string, location: string, room: RoomConfig) {
   const radar   = objects.find(o => o.type === 'radar');
@@ -269,15 +150,15 @@ interface TabState {
 }
 
 function initTabs(): TabState[] {
-  return FLOOR_PLAN_ROOMS.map(fp => ({
-    id:           fp.id,
-    label:        fp.label,
-    area:         fp.area,
-    room:         { ...fp.config },
-    objects:      fp.objects.map(o => ({ ...o })),
-    selectedId:   null,
+  return [{
+    id:            'room_1',
+    label:         'Room 1',
+    area:          '',
+    room:          { name: 'Room 1', width: 4, height: 4 },
+    objects:       [],
+    selectedId:    null,
     adjacentRooms: [],
-  }));
+  }];
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -285,30 +166,27 @@ function initTabs(): TabState[] {
 export default function App() {
   const [tabs,       setTabs]       = useState<TabState[]>(initTabs);
   const [activeIdx,  setActiveIdx]  = useState(0);
-  const [show3D,     setShow3D]     = useState(false);
+  const [viewer,     setViewer]     = useState<null | { simulate: boolean }>(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [dark,       setDark]       = useState(true);
   const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
 
-  // ── Listen for radar placements from mSIM ──────────────────────────────────
-  useEffect(() => {
-    function onMessage(ev: MessageEvent) {
-      if (ev.data && ev.data.type === 'msim-place-radar' && ev.data.position) {
-        const { x, y } = ev.data.position;
-        const preset = OBJECT_PRESETS['radar'];
-        const obj: RoomObject = {
-          id: genId(), type: 'radar', label: `Radar ${ev.data.index ?? ''}`.trim(),
-          x: x - preset.defaultWidth / 2, y: y - preset.defaultHeight / 2,
-          width: preset.defaultWidth, height: preset.defaultHeight,
-          color: preset.color, rotation: 0,
-          marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
-        };
-        setTabs(prev => prev.map((t, i) => i === activeIdx ? { ...t, objects: [...t.objects, obj], selectedId: obj.id } : t));
-      }
-    }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+  // Add a radar at a plan-space centre (used by the simulator's Suggest feature).
+  const addRadarAtCenter = useCallback((pos: { x: number; y: number }) => {
+    const preset = OBJECT_PRESETS['radar'];
+    setTabs(prev => prev.map((t, i) => {
+      if (i !== activeIdx) return t;
+      const n = t.objects.filter(o => o.type === 'radar').length + 1;
+      const obj: RoomObject = {
+        id: genId(), type: 'radar', label: `Radar ${n}`,
+        x: pos.x - preset.defaultWidth / 2, y: pos.y - preset.defaultHeight / 2,
+        width: preset.defaultWidth, height: preset.defaultHeight,
+        color: preset.color, rotation: 0,
+        marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+      };
+      return { ...t, objects: [...t.objects, obj], selectedId: obj.id };
+    }));
   }, [activeIdx]);
 
   // ── Helpers to patch the active tab ────────────────────────────────────────
@@ -415,7 +293,7 @@ export default function App() {
       adjacentRooms: [],
     });
     setShowImport(false);
-    setShow3D(true);
+    setViewer({ simulate: false });
   }
 
   function handleAddAdjacentRoom(doorId: string, wall: WallSide, width: number, height: number, roomType: AdjacentRoomType) {
@@ -536,34 +414,11 @@ export default function App() {
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', background: dark ? 'rgba(16,185,129,0.1)' : 'rgba(16,185,129,0.08)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)', transition: 'all 0.15s' }}
           >🗺 Import</button>
 
-          <button onClick={() => setShow3D(true)} disabled={objects.length === 0}
+          <button onClick={() => setViewer({ simulate: false })} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, background: dark ? 'rgba(6,182,212,0.1)' : 'rgba(6,182,212,0.08)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.25)', transition: 'all 0.15s' }}
           >⬡ 3D</button>
 
-          <button onClick={() => {
-              const kcroom = buildKcroom(room, objects);
-              const plan = {
-                room: { name: kcroom.name, schemaVersion: kcroom.schemaVersion, units: kcroom.units, rooms: kcroom.rooms },
-                devices: (kcroom.devices || []).map(d => ({
-                  id: d.id, roomId: 'room-1', freePosition: d.freePosition, tiltDeg: d.tiltDeg,
-                })),
-                coverageTargets: kcroom.coverageTargets,
-              };
-              const child = window.open(`${import.meta.env.BASE_URL}simulator.html`, '_blank');
-              if (child) {
-                const timer = setInterval(() => {
-                  try { child.postMessage({ type: 'load-kcplan', payload: plan }, '*'); } catch { /* */ }
-                }, 300);
-                const onAck = (ev: MessageEvent) => {
-                  if (ev.data && ev.data.type === 'kcroom-ack') {
-                    clearInterval(timer);
-                    window.removeEventListener('message', onAck);
-                  }
-                };
-                window.addEventListener('message', onAck);
-                setTimeout(() => { clearInterval(timer); window.removeEventListener('message', onAck); }, 10000);
-              }
-            }} disabled={objects.length === 0}
+          <button onClick={() => setViewer({ simulate: true })} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 18px', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', boxShadow: objects.length > 0 ? '0 3px 14px rgba(168,85,247,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
           >▶ Simulate</button>
 
@@ -689,7 +544,7 @@ export default function App() {
         />
       </div>
 
-      {show3D && <Room3DViewer room={room} objects={objects} onClose={() => setShow3D(false)} />}
+      {viewer && <Room3DViewer room={room} objects={objects} simulate={viewer.simulate} onAddRadar={addRadarAtCenter} onClose={() => setViewer(null)} />}
 
       {showImport && (
         <ImportImageModal dark={dark} onImport={handleImportData} onCancel={() => setShowImport(false)} />
