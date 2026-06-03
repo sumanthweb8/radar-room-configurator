@@ -108,6 +108,15 @@ export function boundaryOf(room: RoomConfig): [number, number][] {
   return [[0, 0], [room.width, 0], [room.width, room.height], [0, room.height]];
 }
 
+/** Shoelace signed area; sign indicates winding (>0 = CW in Y-down plan space). */
+export function signedArea(poly: [number, number][]): number {
+  let a = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    a += poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+  }
+  return a / 2;
+}
+
 /** FOV test additionally clipped to the room polygon + floor/ceiling. */
 export function fovCoversPointClipped(
   planX: number, planY: number, height: number,
@@ -275,6 +284,10 @@ export function computeSuggestedPositions(
   const N = boundary.length;
   const STEP = 0.15;
   const offset = RADAR_PROFILE.mountOffsetFromWall + RADAR_PROFILE.depth / 2;
+  // (-dy, dx) is the inward normal only for a CW polygon (shoelace > 0). Flip it
+  // for CCW polygons (e.g. imported DXF rooms) so virtual radars face into the
+  // room instead of out of it — otherwise they cover nothing and we suggest none.
+  const sign = signedArea(boundary) > 0 ? 1 : -1;
 
   type Cand = Suggestion & { pointScore: number };
   const candidates: Cand[] = [];
@@ -284,7 +297,7 @@ export function computeSuggestedPositions(
     const dx = b[0] - a[0], dy = b[1] - a[1];
     const L = Math.hypot(dx, dy);
     if (L < 0.3) continue;
-    const nx = -dy / L, ny = dx / L; // edge normal (inward, matches simulator)
+    const nx = sign * (-dy / L), ny = sign * (dx / L); // inward edge normal
     const steps = Math.floor(L / STEP);
 
     for (let s = 1; s < steps; s++) {

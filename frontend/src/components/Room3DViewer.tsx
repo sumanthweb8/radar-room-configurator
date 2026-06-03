@@ -10,6 +10,7 @@ import {
 } from "../sim/coverage";
 import {
   buildFovConeMesh, buildFloorFootprint, buildAvatarMesh, buildSuggestionMarker,
+  COVERAGE_HEX,
 } from "../sim/fovMesh";
 
 interface Props {
@@ -770,7 +771,10 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
 
     // ── Simulation overlays (footprint, avatars, suggestion markers) ────────
     const suggestionMeshes: THREE.Mesh[] = [];
+    const avatarMeshes: THREE.Object3D[] = [];
+    const avatarGroupById = new Map<string, THREE.Group>();
     let onPointerDown: ((e: PointerEvent) => void) | null = null;
+    let onPointerMove: ((e: PointerEvent) => void) | null = null;
     let onPointerUp: ((e: PointerEvent) => void) | null = null;
     if (simulate) {
       const footprint = buildFloorFootprint(simRadars, room);
@@ -781,7 +785,11 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
         const av = buildAvatarMesh(a.posture, level);
         av.position.set(a.x, 0, a.y);
         av.rotation.y = -a.yawDeg * Math.PI / 180;
+        av.userData.avatarId = a.id;
+        av.traverse(c => { c.userData.avatarId = a.id; });
         scene.add(av);
+        avatarMeshes.push(av);
+        avatarGroupById.set(a.id, av);
       }
 
       suggestions.forEach((s, i) => {
@@ -791,29 +799,73 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
         suggestionMeshes.push(marker);
       });
 
-      // Click a suggestion marker → add a radar there (distinguished from orbit drag).
-      if (suggestionMeshes.length && onAddRadar) {
-        const raycaster = new THREE.Raycaster();
-        let downX = 0, downY = 0;
-        onPointerDown = (e) => { downX = e.clientX; downY = e.clientY; };
-        onPointerUp = (e) => {
-          if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // was a drag
-          const rect = renderer.domElement.getBoundingClientRect();
-          const ndc = new THREE.Vector2(
-            ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            -((e.clientY - rect.top) / rect.height) * 2 + 1,
-          );
-          raycaster.setFromCamera(ndc, camera);
-          const hit = raycaster.intersectObjects(suggestionMeshes, false)[0];
-          if (hit) {
-            const idx = hit.object.userData.index as number;
-            const s = suggestions[idx];
-            if (s) { onAddRadar({ x: s.x, y: s.y }); setSuggestions([]); }
-          }
-        };
-        renderer.domElement.addEventListener('pointerdown', onPointerDown);
-        renderer.domElement.addEventListener('pointerup', onPointerUp);
-      }
+      // Unified pointer handling: drag avatars on the floor, or click a
+      // suggestion marker to place a radar.
+      const raycaster = new THREE.Raycaster();
+      const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      const hitPoint = new THREE.Vector3();
+      let dragId: string | null = null;
+      let downX = 0, downY = 0;
+      const ndcOf = (e: PointerEvent) => {
+        const r = renderer.domElement.getBoundingClientRect();
+        return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      };
+
+      onPointerDown = (e) => {
+        downX = e.clientX; downY = e.clientY;
+        if (!avatarMeshes.length) return;
+        raycaster.setFromCamera(ndcOf(e), camera);
+        const hit = raycaster.intersectObjects(avatarMeshes, true)[0];
+        if (hit) {
+          let o: THREE.Object3D | null = hit.object;
+          while (o && o.userData.avatarId === undefined) o = o.parent;
+          if (o) { dragId = o.userData.avatarId as string; controls.enabled = false; }
+        }
+      };
+
+      onPointerMove = (e) => {
+        if (!dragId) return;
+        raycaster.setFromCamera(ndcOf(e), camera);
+        if (!raycaster.ray.intersectPlane(floorPlane, hitPoint)) return;
+        const x = Math.max(0, Math.min(room.width, hitPoint.x));
+        const z = Math.max(0, Math.min(room.height, hitPoint.z));
+        const g = avatarGroupById.get(dragId);
+        if (!g) return;
+        g.position.x = x; g.position.z = z;
+        // Live badge colour while dragging.
+        const a = avatars.find(av => av.id === dragId);
+        if (a) {
+          const lvl = avatarCoverage({ ...a, x, y: z }, simRadars, room);
+          g.traverse(c => {
+            if (c.userData.kind === 'coverage-badge') ((c as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(COVERAGE_HEX[lvl]);
+          });
+        }
+      };
+
+      onPointerUp = (e) => {
+        if (dragId) {
+          const g = avatarGroupById.get(dragId);
+          const x = g ? g.position.x : 0, z = g ? g.position.z : 0;
+          const id = dragId;
+          dragId = null; controls.enabled = true;
+          setAvatars(prev => prev.map(av => av.id === id ? { ...av, x: +x.toFixed(3), y: +z.toFixed(3) } : av));
+          return;
+        }
+        // Suggestion-marker click (only if it wasn't an orbit drag).
+        if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return;
+        if (!suggestionMeshes.length || !onAddRadar) return;
+        raycaster.setFromCamera(ndcOf(e), camera);
+        const hit = raycaster.intersectObjects(suggestionMeshes, false)[0];
+        if (hit) {
+          const idx = hit.object.userData.index as number;
+          const s = suggestions[idx];
+          if (s) { onAddRadar({ x: s.x, y: s.y }); setSuggestions([]); }
+        }
+      };
+
+      renderer.domElement.addEventListener('pointerdown', onPointerDown);
+      renderer.domElement.addEventListener('pointermove', onPointerMove);
+      renderer.domElement.addEventListener('pointerup', onPointerUp);
     }
 
     // Animate
@@ -830,6 +882,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
     return () => {
       camStateRef.current = { pos: camera.position.toArray(), target: controls.target.toArray() };
       if (onPointerDown) renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      if (onPointerMove) renderer.domElement.removeEventListener('pointermove', onPointerMove);
       if (onPointerUp) renderer.domElement.removeEventListener('pointerup', onPointerUp);
       cancelAnimationFrame(animId); ro.disconnect(); controls.dispose(); renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);

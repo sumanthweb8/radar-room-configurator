@@ -132,6 +132,14 @@ describe('computeSuggestedPositions', () => {
   it('returns empty with no targets', () => {
     expect(computeSuggestedPositions(room, [])).toHaveLength(0);
   });
+
+  it('suggests positions for a CCW polygon room (winding regression)', () => {
+    // CCW square (like imported DXF rooms) — must still face radars inward.
+    const ccwRoom: RoomConfig = { name: 'L', width: 4, height: 4, polygon: [[0, 0], [0, 4], [4, 4], [4, 0]] };
+    const bed = buildTargets([obj({ type: 'bed', x: 1.3, y: 1.3, width: 1.4, height: 1.4 })]);
+    const sugg = computeSuggestedPositions(ccwRoom, bed);
+    expect(sugg.length).toBeGreaterThan(0);
+  });
 });
 
 describe('pointInPolygonPlan', () => {
