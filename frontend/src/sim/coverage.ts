@@ -33,10 +33,17 @@ export interface SimRadar {
 }
 
 export interface CoverageTarget {
-  type: 'bed' | 'door';
+  type: string;          // object type (bed, door, chair, …)
   label: string;
   points: { x: number; y: number; z: number }[]; // z = test height (metres)
 }
+
+/** Representative test height (metres) per object type used for coverage. */
+export const TARGET_HEIGHT: Record<string, number> = {
+  bed: 0.55, door: 0.10, window: 1.0, person: 1.0,
+  sofa: 0.5, chair: 0.5, table: 0.5, desk: 0.5,
+  cabinet: 0.5, wardrobe: 0.5, custom: 0.5,
+};
 
 export type CoverageLevel = 'full' | 'partial' | 'none';
 export type Posture = 'stand' | 'sit' | 'lie';
@@ -137,40 +144,47 @@ function anyRadarCovers(
   return false;
 }
 
-/**
- * Coverage targets straight off the app's RoomObject[].
- * Beds → centre + 4 corners @ 0.55 m; doors → centre + 2 ends @ 0.1 m.
- */
-export function buildTargets(objects: RoomObject[]): CoverageTarget[] {
-  const targets: CoverageTarget[] = [];
-  for (const o of objects) {
-    if (o.type === 'bed') {
-      const z = 0.55;
-      const x0 = o.x, y0 = o.y, x1 = o.x + o.width, y1 = o.y + o.height;
-      targets.push({
-        type: 'bed', label: o.label || 'Bed',
-        points: [
-          { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z },
-          { x: x0, y: y0, z }, { x: x1, y: y0, z },
-          { x: x0, y: y1, z }, { x: x1, y: y1, z },
-        ],
-      });
-    } else if (o.type === 'door') {
-      const z = 0.1;
-      // Two ends along the door's longer dimension + centre.
-      const horizontal = o.width >= o.height;
-      const a = horizontal ? { x: o.x, y: o.y + o.height / 2 } : { x: o.x + o.width / 2, y: o.y };
-      const b = horizontal ? { x: o.x + o.width, y: o.y + o.height / 2 } : { x: o.x + o.width / 2, y: o.y + o.height };
-      targets.push({
-        type: 'door', label: o.label || 'Door',
-        points: [
-          { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z },
-          { x: a.x, y: a.y, z }, { x: b.x, y: b.y, z },
-        ],
-      });
-    }
+/** A single object → coverage target (centre + corners/ends at its test height). */
+function targetFromObject(o: RoomObject): CoverageTarget {
+  const z = TARGET_HEIGHT[o.type] ?? 0.5;
+  if (o.type === 'door') {
+    // Door: centre + the two ends along its longer dimension (floor level).
+    const horizontal = o.width >= o.height;
+    const a = horizontal ? { x: o.x, y: o.y + o.height / 2 } : { x: o.x + o.width / 2, y: o.y };
+    const b = horizontal ? { x: o.x + o.width, y: o.y + o.height / 2 } : { x: o.x + o.width / 2, y: o.y + o.height };
+    return {
+      type: 'door', label: o.label || 'Door',
+      points: [
+        { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z },
+        { x: a.x, y: a.y, z }, { x: b.x, y: b.y, z },
+      ],
+    };
   }
-  return targets;
+  // Everything else: centre + 4 footprint corners.
+  const x0 = o.x, y0 = o.y, x1 = o.x + o.width, y1 = o.y + o.height;
+  return {
+    type: o.type, label: o.label || o.type,
+    points: [
+      { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z },
+      { x: x0, y: y0, z }, { x: x1, y: y0, z },
+      { x: x0, y: y1, z }, { x: x1, y: y1, z },
+    ],
+  };
+}
+
+/**
+ * Coverage targets from the app's RoomObject[].
+ * - With `opts.ids`: one target per selected (non-radar) object — used by Suggest.
+ * - Without: defaults to beds + doors — used by the coverage readout.
+ */
+export function buildTargets(
+  objects: RoomObject[], opts?: { ids?: Set<string> },
+): CoverageTarget[] {
+  const ids = opts?.ids;
+  const picked = ids
+    ? objects.filter(o => o.type !== 'radar' && ids.has(o.id))
+    : objects.filter(o => o.type === 'bed' || o.type === 'door');
+  return picked.map(targetFromObject);
 }
 
 /** full = every point covered by ≥1 radar; none = no points; else partial. */
@@ -273,13 +287,13 @@ export interface Suggestion {
 
 /**
  * Scan every wall edge at 0.15 m, build a virtual inward-facing radar at each,
- * score by how many targets it covers, dedupe within 0.5 m, cap at 8.
- * Ported from simulator.html computeSuggestedPositions.
+ * score by how many targets it covers, dedupe within 0.5 m, and return the best
+ * `count` (top-N independent positions).
  */
 export function computeSuggestedPositions(
-  room: RoomConfig, targets: CoverageTarget[],
+  room: RoomConfig, targets: CoverageTarget[], count = 8,
 ): Suggestion[] {
-  if (!targets.length) return [];
+  if (!targets.length || count < 1) return [];
   const boundary = boundaryOf(room);
   const N = boundary.length;
   const STEP = 0.15;
@@ -335,7 +349,7 @@ export function computeSuggestedPositions(
   for (const c of candidates) {
     if (filtered.some(f => Math.hypot(c.x - f.x, c.y - f.y) < 0.5)) continue;
     filtered.push(c);
-    if (filtered.length >= 8) break;
+    if (filtered.length >= count) break;
   }
   return filtered.map(({ pointScore, ...s }) => s);
 }

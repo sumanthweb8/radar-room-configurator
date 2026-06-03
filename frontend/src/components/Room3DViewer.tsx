@@ -373,6 +373,10 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
   const camStateRef = useRef<{ pos: number[]; target: number[] } | null>(null);
   const [avatars, setAvatars] = useState<SimAvatar[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<Set<string>>(
+    () => new Set(objects.filter(o => o.type === "bed" || o.type === "door").map(o => o.id)),
+  );
+  const [suggestCount, setSuggestCount] = useState(3);
 
   // Radars reduced to the plan-space form the coverage math needs.
   const simRadars = useMemo<SimRadar[]>(() =>
@@ -400,8 +404,17 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
     setAvatars(prev => prev.filter(a => a.id !== id));
   }
   function runSuggest() {
-    setSuggestions(computeSuggestedPositions(room, buildTargets(objects)));
+    setSuggestions(computeSuggestedPositions(room, buildTargets(objects, { ids: selectedTargetIds }), suggestCount));
   }
+  function toggleTarget(id: string) {
+    setSelectedTargetIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  // Objects the user can pick as coverage targets (everything except radars).
+  const targetable = objects.filter(o => o.type !== "radar");
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -915,6 +928,8 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
           onSuggest={runSuggest} onClearSuggest={() => setSuggestions([])}
           onAddAvatar={addAvatar} onPatchAvatar={patchAvatar} onRemoveAvatar={removeAvatar}
           room={room} hasTargets={readout.targets.length > 0}
+          targetable={targetable} selectedTargetIds={selectedTargetIds} onToggleTarget={toggleTarget}
+          suggestCount={suggestCount} onCountChange={setSuggestCount}
         />}
       </div>
     </div>
@@ -926,12 +941,23 @@ const Chip: React.FC<{ level: CoverageLevel }> = ({ level }) => (
   <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '2px 7px', borderRadius: 99, color: '#fff', background: LEVEL_COLOR[level] }}>{level}</span>
 );
 
+const TYPE_ICON: Record<string, string> = {
+  bed: '🛏', door: '🚪', window: '🪟', sofa: '🛋', chair: '🪑', table: '🍽',
+  desk: '🖥', cabinet: '🗄', wardrobe: '🚪', person: '🧍', custom: '📦',
+};
+const iconFor = (type: string) => TYPE_ICON[type] ?? '📦';
+
 interface SimPanelsProps {
   readout: { targets: { label: string; type: string; level: CoverageLevel }[]; avatars: { id: string; posture: Posture; level: CoverageLevel }[] };
   avatars: SimAvatar[];
   suggestions: Suggestion[];
   room: RoomConfig;
   hasTargets: boolean;
+  targetable: RoomObject[];
+  selectedTargetIds: Set<string>;
+  onToggleTarget: (id: string) => void;
+  suggestCount: number;
+  onCountChange: (n: number) => void;
   onSuggest: () => void;
   onClearSuggest: () => void;
   onAddAvatar: () => void;
@@ -946,7 +972,7 @@ const panelBox: React.CSSProperties = {
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '4px 0' };
 const numInput: React.CSSProperties = { width: 46, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '2px 5px' };
 
-const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, room, hasTargets, onSuggest, onClearSuggest, onAddAvatar, onPatchAvatar, onRemoveAvatar }) => (
+const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, room, hasTargets, targetable, selectedTargetIds, onToggleTarget, suggestCount, onCountChange, onSuggest, onClearSuggest, onAddAvatar, onPatchAvatar, onRemoveAvatar }) => (
   <div style={{ position: 'absolute', top: 70, right: 16, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'calc(93vh - 90px)', overflowY: 'auto' }}>
     {/* Coverage readout */}
     <div style={panelBox}>
@@ -954,7 +980,7 @@ const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, ro
       {!hasTargets && <p style={{ margin: 0, fontSize: 10, color: '#64748b' }}>Add a bed or door to measure coverage.</p>}
       {readout.targets.map((t, i) => (
         <div key={i} style={rowStyle}>
-          <span style={{ fontSize: 11, color: '#cbd5e1' }}>{t.type === 'bed' ? '🛏' : '🚪'} {t.label}</span>
+          <span style={{ fontSize: 11, color: '#cbd5e1' }}>{iconFor(t.type)} {t.label}</span>
           <Chip level={t.level} />
         </div>
       ))}
@@ -970,10 +996,32 @@ const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, ro
     {/* Suggest */}
     <div style={panelBox}>
       <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Suggest positions</p>
+
+      {/* Object checklist — pick what the radars must cover */}
+      <p style={{ margin: '0 0 4px', fontSize: 10, color: '#64748b' }}>Cover these objects:</p>
+      {targetable.length === 0 && <p style={{ margin: 0, fontSize: 10, color: '#64748b' }}>No objects in this room.</p>}
+      <div style={{ maxHeight: 132, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 8 }}>
+        {targetable.map(o => (
+          <label key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#cbd5e1', cursor: 'pointer' }}>
+            <input type="checkbox" checked={selectedTargetIds.has(o.id)} onChange={() => onToggleTarget(o.id)} style={{ accentColor: '#a855f7' }} />
+            <span>{iconFor(o.type)} {o.label}</span>
+          </label>
+        ))}
+      </div>
+
+      {/* Count + run */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+        <label style={{ fontSize: 10, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
+          How many
+          <input type="number" min={1} max={8} value={suggestCount}
+            onChange={e => onCountChange(Math.max(1, Math.min(8, Math.round(+e.target.value) || 1)))}
+            style={numInput} />
+        </label>
+      </div>
       <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={onSuggest} disabled={!hasTargets}
-          style={{ flex: 1, padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: hasTargets ? 'pointer' : 'not-allowed', opacity: hasTargets ? 1 : 0.4, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', border: 'none' }}>
-          ✦ Suggest
+        <button onClick={onSuggest} disabled={selectedTargetIds.size === 0}
+          style={{ flex: 1, padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: selectedTargetIds.size === 0 ? 'not-allowed' : 'pointer', opacity: selectedTargetIds.size === 0 ? 0.4 : 1, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', border: 'none' }}>
+          ✦ Suggest {suggestCount}
         </button>
         {suggestions.length > 0 && (
           <button onClick={onClearSuggest} style={{ padding: '6px 10px', borderRadius: 8, fontSize: 11, color: '#94a3b8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>Clear</button>

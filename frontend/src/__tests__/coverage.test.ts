@@ -64,8 +64,19 @@ describe('buildTargets', () => {
     expect(t[0].points).toHaveLength(3);
     expect(t[0].points.every(p => p.z === 0.1)).toBe(true);
   });
-  it('ignores non bed/door objects', () => {
+  it('ignores non bed/door objects by default', () => {
     expect(buildTargets([obj({ type: 'table' })])).toHaveLength(0);
+  });
+  it('with ids → selects any object type (chair) at its test height', () => {
+    const chair = obj({ id: 'c1', type: 'chair', x: 1, y: 1, width: 0.5, height: 0.5 });
+    const t = buildTargets([chair, obj({ id: 'b1', type: 'bed' })], { ids: new Set(['c1']) });
+    expect(t).toHaveLength(1);
+    expect(t[0].type).toBe('chair');
+    expect(t[0].points.every(p => p.z === 0.5)).toBe(true);
+  });
+  it('with ids → excludes radars even if selected', () => {
+    const r = obj({ id: 'r1', type: 'radar' });
+    expect(buildTargets([r], { ids: new Set(['r1']) })).toHaveLength(0);
   });
 });
 
@@ -109,6 +120,12 @@ describe('computeSuggestedPositions', () => {
   it('returns at most 8 suggestions', () => {
     expect(sugg.length).toBeGreaterThan(0);
     expect(sugg.length).toBeLessThanOrEqual(8);
+  });
+  it('respects the requested count', () => {
+    const two = computeSuggestedPositions(room, targets, 2);
+    expect(two.length).toBeLessThanOrEqual(2);
+    expect(computeSuggestedPositions(room, targets, 1).length).toBeLessThanOrEqual(1);
+    expect(computeSuggestedPositions(room, targets, 0)).toHaveLength(0);
   });
   it('is sorted by score descending', () => {
     for (let i = 1; i < sugg.length; i++) {
