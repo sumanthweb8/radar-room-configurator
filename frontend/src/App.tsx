@@ -137,6 +137,29 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
   };
 }
 
+/**
+ * Room boundary expressed in the radar-local frame (radar at 0,0), using the
+ * SAME transform as buildConfig so the zone and object coords align.
+ * X = lateral (right of radar), Y = forward (radar facing). Full precision.
+ */
+function buildZone(objects: RoomObject[], room: RoomConfig): { zone: number[][] } {
+  const radar   = objects.find(o => o.type === 'radar');
+  const originX = radar ? radar.x + radar.width  / 2 : 0;
+  const originY = radar ? radar.y + radar.height / 2 : 0;
+  const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
+  const right_x = -fwd_y, right_y = fwd_x;
+
+  const boundary: [number, number][] = (room.polygon && room.polygon.length >= 3)
+    ? room.polygon
+    : [[0, 0], [room.width, 0], [room.width, room.height], [0, room.height]];
+
+  const zone = boundary.map(([rx, ry]) => {
+    const dx = rx - originX, dy = ry - originY;
+    return [dx * right_x + dy * right_y, dx * fwd_x + dy * fwd_y];
+  });
+  return { zone };
+}
+
 // ── Per-tab state ─────────────────────────────────────────────────────────────
 
 interface TabState {
@@ -310,18 +333,29 @@ export default function App() {
     patchTab({ adjacentRooms: adjacentRooms.filter(r => r.id !== id) });
   }
 
-  function handleExportConfirm(board: string, location: string) {
-    setShowExport(false);
-    const config = buildConfig(objects, board, location, room) as any;
-    const clamped: string[] = config._clampedMargins || [];
-    delete config._clampedMargins;
-    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+  function downloadJson(data: unknown, filename: string) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url;
-    a.download = `${board}_${tab.label.replace(/\s+/g,'_')}_config.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function handleExportConfirm(board: string, location: string) {
+    setShowExport(false);
+    const base = `${board}_${tab.label.replace(/\s+/g, '_')}`;
+
+    const config = buildConfig(objects, board, location, room) as any;
+    const clamped: string[] = config._clampedMargins || [];
+    delete config._clampedMargins;
+    downloadJson(config, `${base}_config.json`);
+
+    // Second file: room boundary in the radar-local frame (radar at 0,0).
+    const zone = buildZone(objects, room);
+    setTimeout(() => downloadJson(zone, `${base}_zone.json`), 150);
+
     if (clamped.length > 0) setMarginAlert(clamped);
   }
 

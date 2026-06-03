@@ -30,7 +30,7 @@ export const ExportModal: React.FC<Props> = ({ onConfirm, onCancel, dark, object
           <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📥</div>
           <div>
             <p style={{ fontSize: 14, fontWeight: 600, color: textMd, margin: 0 }}>Export Config</p>
-            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Enter device details before downloading</p>
+            <p style={{ fontSize: 11, color: textSm, margin: 0, marginTop: 2 }}>Downloads two files: config + zone (room boundary, radar at 0,0)</p>
           </div>
         </div>
 
