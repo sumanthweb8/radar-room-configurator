@@ -118,4 +118,7 @@ async def import_dxf(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # PORT env var overrides the default (8000) — useful when 8000 is taken,
+    # and matches the Cloud Run convention.
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

@@ -66,6 +66,12 @@ source .venv/bin/activate
 python3 main.py          # → http://localhost:8000
 ```
 
+If port 8000 is already in use, pick another with `PORT`:
+
+```bash
+PORT=8001 python3 main.py   # → http://localhost:8001
+```
+
 ### Frontend
 
 **One-time setup** — install dependencies:
