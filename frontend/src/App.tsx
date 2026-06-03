@@ -1,164 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
-import { OBJECT_PRESETS, getRadarFacing } from './types';
+import { OBJECT_PRESETS } from './types';
+import { buildConfig, buildZone } from './exportConfig';
 import { RoomEditor } from './components/RoomEditor';
 import { ObjectPalette } from './components/ObjectPalette';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
+import { PlotEditor } from './components/PlotEditor';
 import { ImportImageModal } from './components/ImportImageModal';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
 
-function buildConfig(objects: RoomObject[], board: string, location: string, room: RoomConfig) {
-  const radar   = objects.find(o => o.type === 'radar');
-  const originX = radar ? radar.x + radar.width  / 2 : 0;
-  const originY = radar ? radar.y + radar.height / 2 : 0;
-
-  // Radar facing direction → rotate coords into radar-local frame
-  // Config Y = forward (direction radar faces), Config X = lateral (right of radar)
-  const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
-  const right_x = -fwd_y, right_y = fwd_x;
-
-  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
-  let doorIdx = 0;
-  const serialized = exportable.map(obj => {
-    // Transform all 4 room corners into radar-local coords, then take bounding box
-    const corners = [
-      [obj.x,             obj.y],
-      [obj.x + obj.width, obj.y],
-      [obj.x,             obj.y + obj.height],
-      [obj.x + obj.width, obj.y + obj.height],
-    ];
-    const transformed = corners.map(([rx, ry]) => {
-      const dx = rx - originX, dy = ry - originY;
-      return [+(dx * right_x + dy * right_y).toFixed(3), +(dx * fwd_x + dy * fwd_y).toFixed(3)];
-    });
-    const xs = transformed.map(c => c[0]), ys = transformed.map(c => c[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-
-    const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
-    const entry: Record<string, unknown> = {
-      name,
-      top_left:     [minX, maxY],
-      top_right:    [maxX, maxY],
-      bottom_left:  [minX, minY],
-      bottom_right: [maxX, minY],
-      margin_top:    obj.marginTop    ?? 0.3,
-      margin_bottom: obj.marginBottom ?? 0.3,
-      margin_left:   obj.marginLeft   ?? 0.3,
-      margin_right:  obj.marginRight  ?? 0.3,
-    };
-    if (obj.type === 'bed') {
-      entry.top_height    = 0.5;
-      entry.bottom_height = 0.5;
-      entry.right_width   = 0.5;
-      entry.left_width    = 0.5;
-    }
-    return entry;
-  });
-
-  // Clamp margins so detection zones never overlap between objects
-  const MARGIN_THRESH = 0.3 * 2;
-  const clampedPairs: string[] = [];
-  const objBounds = serialized.map(o => {
-    const tl = o.top_left as number[], tr = o.top_right as number[], bl = o.bottom_left as number[];
-    return { minX: tl[0], maxX: tr[0], minY: bl[1], maxY: tl[1] };
-  });
-  for (let i = 0; i < serialized.length; i++) {
-    const a = serialized[i];
-    const ai = objBounds[i];
-    for (let j = i + 1; j < serialized.length; j++) {
-      const b = serialized[j];
-      const bj = objBounds[j];
-      const yNear = (ai.minY - MARGIN_THRESH) < bj.maxY && (bj.minY - MARGIN_THRESH) < ai.maxY;
-      const xNear = (ai.minX - MARGIN_THRESH) < bj.maxX && (bj.minX - MARGIN_THRESH) < ai.maxX;
-
-      // Horizontal: A right ↔ B left
-      if (bj.minX >= ai.maxX && yNear) {
-        const gap = bj.minX - ai.maxX;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((a.margin_right as number) + (b.margin_left as number) > gap) {
-          a.margin_right = Math.min(a.margin_right as number, half);
-          b.margin_left  = Math.min(b.margin_left  as number, half);
-          clampedPairs.push(`${a.name} ↔ ${b.name} (horizontal gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Horizontal: B right ↔ A left
-      if (ai.minX >= bj.maxX && yNear) {
-        const gap = ai.minX - bj.maxX;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((b.margin_right as number) + (a.margin_left as number) > gap) {
-          b.margin_right = Math.min(b.margin_right as number, half);
-          a.margin_left  = Math.min(a.margin_left  as number, half);
-          clampedPairs.push(`${b.name} ↔ ${a.name} (horizontal gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Vertical: A top ↔ B bottom
-      if (bj.minY >= ai.maxY && xNear) {
-        const gap = bj.minY - ai.maxY;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((a.margin_top as number) + (b.margin_bottom as number) > gap) {
-          a.margin_top    = Math.min(a.margin_top    as number, half);
-          b.margin_bottom = Math.min(b.margin_bottom as number, half);
-          clampedPairs.push(`${a.name} ↔ ${b.name} (vertical gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Vertical: B top ↔ A bottom
-      if (ai.minY >= bj.maxY && xNear) {
-        const gap = ai.minY - bj.maxY;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((b.margin_top as number) + (a.margin_bottom as number) > gap) {
-          b.margin_top    = Math.min(b.margin_top    as number, half);
-          a.margin_bottom = Math.min(a.margin_bottom as number, half);
-          clampedPairs.push(`${b.name} ↔ ${a.name} (vertical gap ${gap.toFixed(2)}m)`);
-        }
-      }
-    }
-  }
-
-  const names     = serialized.map(o => o.name as string);
-  const bedNames  = names.filter(n => n === 'bed');
-  const doorNames = names.filter(n => n.startsWith('door'));
-
-  return {
-    device_configs: { board, location },
-    objects: serialized,
-    _clampedMargins: clampedPairs,
-    state_machine:               { objects: names },
-    out_of_room_alerts:          { objects: doorNames },
-    out_of_bed_alerts:           { objects: bedNames },
-    'on_bed-toss':               { objects: bedNames },
-    journey_mapping_time_taken:  { objects: names },
-    state_machine_v2:            { objects: bedNames },
-    state_machine_flickering:    { objects: bedNames },
-    near_edge_alerts:            { objects: bedNames },
-  };
-}
-
-/**
- * Room boundary expressed in the radar-local frame (radar at 0,0), using the
- * SAME transform as buildConfig so the zone and object coords align.
- * X = lateral (right of radar), Y = forward (radar facing). Full precision.
- */
-function buildZone(objects: RoomObject[], room: RoomConfig): { zone: number[][] } {
-  const radar   = objects.find(o => o.type === 'radar');
-  const originX = radar ? radar.x + radar.width  / 2 : 0;
-  const originY = radar ? radar.y + radar.height / 2 : 0;
-  const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
-  const right_x = -fwd_y, right_y = fwd_x;
-
-  const boundary: [number, number][] = (room.polygon && room.polygon.length >= 3)
-    ? room.polygon
-    : [[0, 0], [room.width, 0], [room.width, room.height], [0, room.height]];
-
-  const zone = boundary.map(([rx, ry]) => {
-    const dx = rx - originX, dy = ry - originY;
-    return [dx * right_x + dy * right_y, dx * fwd_x + dy * fwd_y];
-  });
-  return { zone };
-}
 
 // ── Per-tab state ─────────────────────────────────────────────────────────────
 
@@ -191,6 +44,7 @@ export default function App() {
   const [activeIdx,  setActiveIdx]  = useState(0);
   const [viewer,     setViewer]     = useState<null | { simulate: boolean }>(null);
   const [showExport, setShowExport] = useState(false);
+  const [showPlot,   setShowPlot]   = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [dark,       setDark]       = useState(true);
   const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
@@ -456,6 +310,10 @@ export default function App() {
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 18px', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', boxShadow: objects.length > 0 ? '0 3px 14px rgba(168,85,247,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
           >▶ Simulate</button>
 
+          <button onClick={() => setShowPlot(true)} disabled={objects.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, background: dark ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.08)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', transition: 'all 0.15s' }}
+          >▣ Plot</button>
+
           <button onClick={() => setShowExport(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(99,102,241,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
           >↓ Export</button>
@@ -582,6 +440,10 @@ export default function App() {
 
       {showImport && (
         <ImportImageModal dark={dark} onImport={handleImportData} onCancel={() => setShowImport(false)} />
+      )}
+
+      {showPlot && (
+        <PlotEditor dark={dark} room={room} objects={objects} onClose={() => setShowPlot(false)} />
       )}
 
       {showExport && (
