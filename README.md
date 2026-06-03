@@ -88,10 +88,19 @@ cd frontend
 npm run dev              # → http://localhost:5173
 ```
 
-Point the frontend at the backend with `VITE_API_BASE` (defaults to same-origin):
+The dev server proxies `/api/*` to the backend at `http://localhost:8000`. If
+your backend runs on a different port (e.g. you started it with `PORT=8001`
+because 8000 was busy), point the proxy at it with `BACKEND_URL`:
 
 ```bash
-VITE_API_BASE=http://localhost:8000 npm run dev
+BACKEND_URL=http://localhost:8001 npm run dev   # /api → http://localhost:8001
+```
+
+For a **production** build (or to bypass the dev proxy entirely), bake in the
+backend origin with `VITE_API_BASE` so the app calls it directly:
+
+```bash
+VITE_API_BASE=http://localhost:8001 npm run dev
 ```
 
 ---

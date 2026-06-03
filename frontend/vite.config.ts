@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 
 const isGhPages = process.env.DEPLOY_TARGET === "gh-pages";
 
+// Dev /api proxy target. Override when the backend isn't on the default 8000
+// (e.g. that port is taken): `BACKEND_URL=http://localhost:8001 npm run dev`.
+const backendUrl = process.env.BACKEND_URL || "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react()],
   // Local builds use base '/' so FastAPI can serve from root.
@@ -13,7 +17,7 @@ export default defineConfig({
     // Proxy /api/* to the FastAPI backend so CORS is never an issue in dev.
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: backendUrl,
         changeOrigin: true,
       },
     },
