@@ -9,6 +9,9 @@ import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
 import { PlotEditor } from './components/PlotEditor';
 import { ImportImageModal } from './components/ImportImageModal';
+import { RoomSplitModal } from './components/RoomSplitModal';
+import { boundaryOf, pointInPolygonPlan } from './sim/coverage';
+import { splitPolygonByPolyline, polygonBBox, toLocalFrame, type Pt } from './sim/geom';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
 
@@ -46,6 +49,7 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [showPlot,   setShowPlot]   = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showSplit,  setShowSplit]  = useState(false);
   const [dark,       setDark]       = useState(true);
   const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
@@ -181,6 +185,34 @@ export default function App() {
     setTabs(prev => prev.map((t, i) => i === idx
       ? { ...t, label: clean, room: { ...t.room, name: clean } }
       : t));
+  }
+
+  // Manually split the active room along a drawn divider. Keeps the original tab
+  // and inserts the two halves as new tabs, partitioning objects by centre.
+  function handleSplitRoom(polyline: Pt[], name1: string, name2: string) {
+    const boundary = boundaryOf(room) as Pt[];
+    const res = splitPolygonByPolyline(boundary, polyline, { snapTol: 0.6 });
+    if (!res) { window.alert('Could not split: draw the divider from one wall to another.'); return; }
+
+    const makeHalf = (poly: Pt[], name: string): TabState => {
+      const bbox = polygonBBox(poly);
+      const { local } = toLocalFrame(poly);
+      const half = objects
+        .filter(o => pointInPolygonPlan(o.x + o.width / 2, o.y + o.height / 2, poly))
+        .map(o => ({ ...o, id: genId(), x: +(o.x - bbox.minX).toFixed(3), y: +(o.y - bbox.minY).toFixed(3) }));
+      return {
+        id: genId(), label: name,
+        area: (bbox.width * bbox.height).toFixed(2) + ' m²',
+        room: { name, width: +bbox.width.toFixed(3), height: +bbox.height.toFixed(3), polygon: local },
+        objects: half, selectedId: null, adjacentRooms: [],
+      };
+    };
+
+    const t1 = makeHalf(res.polyA, name1);
+    const t2 = makeHalf(res.polyB, name2);
+    setTabs(prev => [...prev.slice(0, activeIdx + 1), t1, t2, ...prev.slice(activeIdx + 1)]);
+    setActiveIdx(activeIdx + 1); // jump to the first new room
+    setShowSplit(false);
   }
 
   function handleAddAdjacentRoom(doorId: string, wall: WallSide, width: number, height: number, roomType: AdjacentRoomType) {
@@ -323,6 +355,11 @@ export default function App() {
           <button onClick={() => setShowPlot(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, background: dark ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.08)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', transition: 'all 0.15s' }}
           >▣ Plot</button>
+
+          <button onClick={() => setShowSplit(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', background: dark ? 'rgba(236,72,153,0.1)' : 'rgba(236,72,153,0.08)', color: '#ec4899', border: '1px solid rgba(236,72,153,0.3)', transition: 'all 0.15s' }}
+            title="Draw a divider to split this room into two"
+          >✂ Split</button>
 
           <button onClick={() => setShowExport(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(99,102,241,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
@@ -477,6 +514,10 @@ export default function App() {
 
       {showPlot && (
         <PlotEditor dark={dark} room={room} objects={objects} onClose={() => setShowPlot(false)} />
+      )}
+
+      {showSplit && (
+        <RoomSplitModal dark={dark} room={room} objects={objects} onSplit={handleSplitRoom} onCancel={() => setShowSplit(false)} />
       )}
 
       {showExport && (

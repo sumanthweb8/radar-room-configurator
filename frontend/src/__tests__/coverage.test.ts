@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  RADAR_PROFILE, fovCoversPoint, pointInPolygonPlan, boundaryOf,
+  RADAR_PROFILE, fovCoversPoint, fovCoversPointClipped, pointInPolygonPlan, boundaryOf,
   buildTargets, targetCoverage, avatarCoverage, computeSuggestedPositions,
+  buildOccluders, coverageStrength, strongestCoverage, uncoveredTargets,
   type SimRadar, type SimAvatar,
 } from '../sim/coverage';
 import type { RoomObject, RoomConfig } from '../types';
@@ -169,5 +170,68 @@ describe('pointInPolygonPlan', () => {
     const L: [number, number][] = [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]];
     expect(pointInPolygonPlan(1, 1, L)).toBe(true);   // in the stem
     expect(pointInPolygonPlan(3, 3, L)).toBe(false);  // in the notch
+  });
+});
+
+describe('editable max range', () => {
+  it('a point at ~3.8m is covered by default but not when range is clamped to 3m', () => {
+    expect(fovCoversPoint(2, 3, 0, topRadar)).toBe(true);
+    expect(fovCoversPoint(2, 3, 0, { ...topRadar, maxRange: 3 })).toBe(false);
+  });
+});
+
+describe('coverageStrength', () => {
+  it('is 0 outside the cone and positive inside', () => {
+    expect(coverageStrength(2, -1, 0, topRadar)).toBe(0);   // behind
+    expect(coverageStrength(2, 2, 0, topRadar)).toBeGreaterThan(0);
+  });
+  it('falls off away from the boresight centre', () => {
+    const centre = coverageStrength(2, 2, 0, topRadar);
+    const offAxis = coverageStrength(3.2, 2, 0, topRadar);  // same range, more lateral
+    expect(centre).toBeGreaterThan(offAxis);
+  });
+  it('strongestCoverage is 0 outside the room polygon', () => {
+    expect(strongestCoverage({ x: -1, y: 2, z: 0 }, [topRadar], room)).toBe(0);
+    expect(strongestCoverage({ x: 2, y: 2, z: 0 }, [topRadar], room)).toBeGreaterThan(0);
+  });
+});
+
+describe('occlusion / line-of-sight', () => {
+  it('no occluders == empty occluders (parity)', () => {
+    const a = fovCoversPointClipped(2, 2.5, 0, topRadar, room);
+    const b = fovCoversPointClipped(2, 2.5, 0, topRadar, room, 3.0, { occluders: [] });
+    expect(a).toBe(b);
+  });
+
+  it('a tall wardrobe blocks the point directly behind it', () => {
+    // Wardrobe straddling the apex→point line (x=2), between radar and (2,2.5).
+    const wardrobe = obj({ type: 'wardrobe', x: 1.6, y: 1.0, width: 0.8, height: 0.4 });
+    const occ = { occluders: buildOccluders([wardrobe]) };
+    expect(fovCoversPointClipped(2, 2.5, 0, topRadar, room)).toBe(true);            // unblocked
+    expect(fovCoversPointClipped(2, 2.5, 0, topRadar, room, 3.0, occ)).toBe(false); // shadowed
+  });
+
+  it('doors and windows are transparent (produce no occluders)', () => {
+    expect(buildOccluders([obj({ type: 'door' }), obj({ type: 'window' })])).toHaveLength(0);
+  });
+
+  it('a radar still works through a transparent door', () => {
+    const door = obj({ type: 'door', x: 1.6, y: 1.0, width: 0.8, height: 0.1 });
+    const occ = { occluders: buildOccluders([door]) };
+    expect(fovCoversPointClipped(2, 2.5, 0, topRadar, room, 3.0, occ)).toBe(true);
+  });
+
+  it('skips self-occlusion: a bed is not blocked by itself', () => {
+    const bedObj = obj({ type: 'bed', x: 1.4, y: 1.4, width: 1.2, height: 1.2 });
+    const t = buildTargets([bedObj])[0];
+    const withSelf = targetCoverage(t, [topRadar], room, buildOccluders([bedObj]));
+    const without = targetCoverage(t, [topRadar], room);
+    expect(withSelf).toBe(without);
+  });
+
+  it('uncoveredTargets reports a target a single radar cannot fully cover', () => {
+    const farBed = buildTargets([obj({ type: 'bed', x: 3.4, y: 3.4, width: 0.5, height: 0.5 })]);
+    const gaps = uncoveredTargets(farBed, [topRadar], room);
+    expect(gaps.length).toBe(1);
   });
 });

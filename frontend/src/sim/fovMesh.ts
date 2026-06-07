@@ -10,8 +10,9 @@
 import * as THREE from 'three';
 import type { RoomConfig } from '../types';
 import {
-  RADAR_PROFILE, fovCoversPointClipped, boundaryOf,
+  RADAR_PROFILE, strongestCoverage, boundaryOf,
   anatomicalPointsLocal, type SimRadar, type CoverageLevel, type Posture,
+  type Occluder,
 } from './coverage';
 
 export const COVERAGE_HEX: Record<CoverageLevel, number> = {
@@ -25,7 +26,7 @@ export const COVERAGE_HEX: Record<CoverageLevel, number> = {
  */
 export function buildFovConeMesh(radar: SimRadar): THREE.Group {
   const mh = radar.mountHeight ?? RADAR_PROFILE.mountHeight;
-  const range = RADAR_PROFILE.maxRangeM;
+  const range = radar.maxRange ?? RADAR_PROFILE.maxRangeM;
   const aMaj = range * Math.tan(RADAR_PROFILE.halfPowerHalfAngleHDeg * Math.PI / 180);
   const bMin = range * Math.tan(RADAR_PROFILE.halfPowerHalfAngleVDeg * Math.PI / 180);
 
@@ -72,27 +73,35 @@ export function buildFovConeMesh(radar: SimRadar): THREE.Group {
 }
 
 /**
- * Floor coverage footprint — union of all radars' room-clipped coverage at
- * floor level, drawn as faint quads. Computed once per radar/room change.
+ * Floor coverage heatmap — per-cell signal strength (0..1) over all radars,
+ * coloured on a red→amber→green gradient (weak→strong). Respects occlusion when
+ * `occluders` is supplied. Computed once per radar/room/param change.
  */
-export function buildFloorFootprint(radars: SimRadar[], room: RoomConfig, ceilingHeight = 3.0): THREE.Object3D | null {
+export function buildFloorFootprint(
+  radars: SimRadar[], room: RoomConfig, ceilingHeight = 3.0, occluders?: Occluder[],
+): THREE.Object3D | null {
   if (!radars.length) return null;
   const bnd = boundaryOf(room);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const [x, y] of bnd) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
 
-  const STEP = 0.12;
+  const occ = occluders && occluders.length ? { occluders } : undefined;
+  const STEP = 0.08;
   const h = STEP / 2;
   const verts: number[] = [];
+  const colors: number[] = [];
   const idx: number[] = [];
+  const c = new THREE.Color();
   let n = 0;
   for (let x = minX + h; x < maxX; x += STEP) {
     for (let y = minY + h; y < maxY; y += STEP) {
-      let covered = false;
-      for (const r of radars) { if (fovCoversPointClipped(x, y, 0, r, room, ceilingHeight)) { covered = true; break; } }
-      if (!covered) continue;
+      const s = strongestCoverage({ x, y, z: 0 }, radars, room, ceilingHeight, occ);
+      if (s <= 0) continue;
+      // hue 0 (red) → 0.33 (green) as strength rises.
+      c.setHSL(s * 0.33, 0.85, 0.5);
       const yq = 0.006;
       verts.push(x - h, yq, y - h,  x + h, yq, y - h,  x + h, yq, y + h,  x - h, yq, y + h);
+      for (let k = 0; k < 4; k++) colors.push(c.r, c.g, c.b);
       idx.push(n, n + 1, n + 2,  n, n + 2, n + 3);
       n += 4;
     }
@@ -100,10 +109,11 @@ export function buildFloorFootprint(radars: SimRadar[], room: RoomConfig, ceilin
   if (!n) return null;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   const mat = new THREE.MeshBasicMaterial({
-    color: 0x8b5cf6, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false,
+    vertexColors: true, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
   });
   return new THREE.Mesh(geo, mat);
 }

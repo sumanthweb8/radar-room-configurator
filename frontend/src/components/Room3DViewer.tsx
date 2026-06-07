@@ -5,8 +5,9 @@ import type { RoomConfig, RoomObject } from "../types";
 import { getRadarFacing } from "../types";
 import {
   buildTargets, targetCoverage, avatarCoverage,
-  computeSuggestedPositions,
+  computeSuggestedPositions, buildOccluders, uncoveredTargets, RADAR_PROFILE,
   type SimRadar, type SimAvatar, type Suggestion, type Posture, type CoverageLevel,
+  type Occluder,
 } from "../sim/coverage";
 import {
   buildFovConeMesh, buildFloorFootprint, buildAvatarMesh, buildSuggestionMarker,
@@ -373,26 +374,37 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
   const camStateRef = useRef<{ pos: number[]; target: number[] } | null>(null);
   const [avatars, setAvatars] = useState<SimAvatar[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [gaps, setGaps] = useState<string[]>([]);
   const [selectedTargetIds, setSelectedTargetIds] = useState<Set<string>>(
     () => new Set(objects.filter(o => o.type === "bed" || o.type === "door").map(o => o.id)),
   );
   const [suggestCount, setSuggestCount] = useState(3);
+  // Editable simulation params (tilt and mount height stay hardcoded).
+  const [maxRange, setMaxRange] = useState<number>(RADAR_PROFILE.maxRangeM);
+  const [ceilingHeight, setCeilingHeight] = useState(3.0);
+  const [occlusionOn, setOcclusionOn] = useState(true);
+  const [placeMode, setPlaceMode] = useState(false);
+
+  // Furniture/wall occluders for line-of-sight (empty when occlusion is off).
+  const occluders = useMemo<Occluder[]>(
+    () => (occlusionOn ? buildOccluders(objects) : []), [objects, occlusionOn]);
 
   // Radars reduced to the plan-space form the coverage math needs.
   const simRadars = useMemo<SimRadar[]>(() =>
     objects.filter(o => o.type === "radar").map(o => {
       const f = getRadarFacing(o, room);
-      return { x: o.x + o.width / 2, y: o.y + o.height / 2, facingX: f.nx, facingY: f.ny, tiltDeg: -45 };
-    }), [objects, room]);
+      return { x: o.x + o.width / 2, y: o.y + o.height / 2, facingX: f.nx, facingY: f.ny, tiltDeg: -45, maxRange };
+    }), [objects, room, maxRange]);
 
   // Live coverage readout (cheap, pure) for the panel.
   const readout = useMemo(() => {
     const targets = buildTargets(objects);
+    const occ = occluders.length ? occluders : undefined;
     return {
-      targets: targets.map(t => ({ label: t.label, type: t.type, level: targetCoverage(t, simRadars, room) })),
-      avatars: avatars.map(a => ({ id: a.id, posture: a.posture, level: avatarCoverage(a, simRadars, room) })),
+      targets: targets.map(t => ({ label: t.label, type: t.type, level: targetCoverage(t, simRadars, room, occ, ceilingHeight) })),
+      avatars: avatars.map(a => ({ id: a.id, posture: a.posture, level: avatarCoverage(a, simRadars, room, occ, ceilingHeight) })),
     };
-  }, [objects, room, simRadars, avatars]);
+  }, [objects, room, simRadars, avatars, occluders, ceilingHeight]);
 
   function addAvatar() {
     setAvatars(prev => [...prev, { id: `av-${++_avatarSeq}`, x: room.width / 2, y: room.height / 2, posture: "stand", yawDeg: 0 }]);
@@ -404,7 +416,15 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
     setAvatars(prev => prev.filter(a => a.id !== id));
   }
   function runSuggest() {
-    setSuggestions(computeSuggestedPositions(room, buildTargets(objects, { ids: selectedTargetIds }), suggestCount));
+    const occ = occluders.length ? occluders : undefined;
+    const t = buildTargets(objects, { ids: selectedTargetIds });
+    const sug = computeSuggestedPositions(room, t, suggestCount, occ);
+    setSuggestions(sug);
+    // Residual gaps: targets the suggested set still can't fully cover.
+    const sugRadars: SimRadar[] = sug.map(s => ({
+      x: s.x, y: s.y, facingX: s.facingX, facingY: s.facingY, tiltDeg: -45, maxRange,
+    }));
+    setGaps(uncoveredTargets(t, sugRadars, room, occ, ceilingHeight).map(g => g.label));
   }
   function toggleTarget(id: string) {
     setSelectedTargetIds(prev => {
@@ -790,11 +810,12 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
     let onPointerMove: ((e: PointerEvent) => void) | null = null;
     let onPointerUp: ((e: PointerEvent) => void) | null = null;
     if (simulate) {
-      const footprint = buildFloorFootprint(simRadars, room);
+      const occ = occluders.length ? occluders : undefined;
+      const footprint = buildFloorFootprint(simRadars, room, ceilingHeight, occluders);
       if (footprint) scene.add(footprint);
 
       for (const a of avatars) {
-        const level = avatarCoverage(a, simRadars, room);
+        const level = avatarCoverage(a, simRadars, room, occ, ceilingHeight);
         const av = buildAvatarMesh(a.posture, level);
         av.position.set(a.x, 0, a.y);
         av.rotation.y = -a.yawDeg * Math.PI / 180;
@@ -848,7 +869,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
         // Live badge colour while dragging.
         const a = avatars.find(av => av.id === dragId);
         if (a) {
-          const lvl = avatarCoverage({ ...a, x, y: z }, simRadars, room);
+          const lvl = avatarCoverage({ ...a, x, y: z }, simRadars, room, occ, ceilingHeight);
           g.traverse(c => {
             if (c.userData.kind === 'coverage-badge') ((c as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(COVERAGE_HEX[lvl]);
           });
@@ -864,8 +885,21 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
           setAvatars(prev => prev.map(av => av.id === id ? { ...av, x: +x.toFixed(3), y: +z.toFixed(3) } : av));
           return;
         }
-        // Suggestion-marker click (only if it wasn't an orbit drag).
+        // Click (not an orbit drag) from here on.
         if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return;
+
+        // Place-radar mode: drop a radar at the clicked floor point, snapped to
+        // the nearest wall (facing is derived inward at sim time).
+        if (placeMode && onAddRadar) {
+          raycaster.setFromCamera(ndcOf(e), camera);
+          if (raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
+            const wall = nearestWall(hitPoint.x, hitPoint.z);
+            onAddRadar({ x: +wall.x.toFixed(3), y: +wall.z.toFixed(3) });
+          }
+          return;
+        }
+
+        // Suggestion-marker click.
         if (!suggestionMeshes.length || !onAddRadar) return;
         raycaster.setFromCamera(ndcOf(e), camera);
         const hit = raycaster.intersectObjects(suggestionMeshes, false)[0];
@@ -900,7 +934,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
       cancelAnimationFrame(animId); ro.disconnect(); controls.dispose(); renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
-  }, [objects, room, simulate, simRadars, avatars, suggestions, onAddRadar]);
+  }, [objects, room, simulate, simRadars, avatars, suggestions, onAddRadar, occluders, ceilingHeight, placeMode]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(6px)' }}>
@@ -924,12 +958,17 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
         <div ref={mountRef} style={{ flex: 1, width: '100%' }} />
 
         {simulate && <SimPanels
-          readout={readout} avatars={avatars} suggestions={suggestions}
-          onSuggest={runSuggest} onClearSuggest={() => setSuggestions([])}
+          readout={readout} avatars={avatars} suggestions={suggestions} gaps={gaps}
+          onSuggest={runSuggest} onClearSuggest={() => { setSuggestions([]); setGaps([]); }}
           onAddAvatar={addAvatar} onPatchAvatar={patchAvatar} onRemoveAvatar={removeAvatar}
           room={room} hasTargets={readout.targets.length > 0}
           targetable={targetable} selectedTargetIds={selectedTargetIds} onToggleTarget={toggleTarget}
           suggestCount={suggestCount} onCountChange={setSuggestCount}
+          maxRange={maxRange} onMaxRange={setMaxRange}
+          ceilingHeight={ceilingHeight} onCeiling={setCeilingHeight}
+          occlusionOn={occlusionOn} onToggleOcclusion={() => setOcclusionOn(v => !v)}
+          placeMode={placeMode} onTogglePlace={() => setPlaceMode(v => !v)}
+          canPlace={!!onAddRadar}
         />}
       </div>
     </div>
@@ -963,6 +1002,16 @@ interface SimPanelsProps {
   onAddAvatar: () => void;
   onPatchAvatar: (id: string, patch: Partial<SimAvatar>) => void;
   onRemoveAvatar: (id: string) => void;
+  gaps: string[];
+  maxRange: number;
+  onMaxRange: (v: number) => void;
+  ceilingHeight: number;
+  onCeiling: (v: number) => void;
+  occlusionOn: boolean;
+  onToggleOcclusion: () => void;
+  placeMode: boolean;
+  onTogglePlace: () => void;
+  canPlace: boolean;
 }
 
 const panelBox: React.CSSProperties = {
@@ -972,8 +1021,43 @@ const panelBox: React.CSSProperties = {
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '4px 0' };
 const numInput: React.CSSProperties = { width: 46, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '2px 5px' };
 
-const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, room, hasTargets, targetable, selectedTargetIds, onToggleTarget, suggestCount, onCountChange, onSuggest, onClearSuggest, onAddAvatar, onPatchAvatar, onRemoveAvatar }) => (
+const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, gaps, room, hasTargets, targetable, selectedTargetIds, onToggleTarget, suggestCount, onCountChange, onSuggest, onClearSuggest, onAddAvatar, onPatchAvatar, onRemoveAvatar, maxRange, onMaxRange, ceilingHeight, onCeiling, occlusionOn, onToggleOcclusion, placeMode, onTogglePlace, canPlace }) => (
   <div style={{ position: 'absolute', top: 70, right: 16, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'calc(93vh - 90px)', overflowY: 'auto' }}>
+    {/* Radar settings */}
+    <div style={panelBox}>
+      <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Radar settings</p>
+      <div style={rowStyle}>
+        <span style={{ fontSize: 11, color: '#cbd5e1' }}>Max range</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="range" min={2} max={6} step={0.1} value={maxRange}
+            onChange={e => onMaxRange(+e.target.value)} style={{ width: 96, accentColor: '#a855f7' }} />
+          <span style={{ fontSize: 11, color: '#a5b4fc', fontFamily: 'monospace', width: 38, textAlign: 'right' }}>{maxRange.toFixed(1)}m</span>
+        </span>
+      </div>
+      <div style={rowStyle}>
+        <span style={{ fontSize: 11, color: '#cbd5e1' }}>Ceiling</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="range" min={2.2} max={3.5} step={0.05} value={ceilingHeight}
+            onChange={e => onCeiling(+e.target.value)} style={{ width: 96, accentColor: '#a855f7' }} />
+          <span style={{ fontSize: 11, color: '#a5b4fc', fontFamily: 'monospace', width: 38, textAlign: 'right' }}>{ceilingHeight.toFixed(2)}m</span>
+        </span>
+      </div>
+      <label style={{ ...rowStyle, cursor: 'pointer' }}>
+        <span style={{ fontSize: 11, color: '#cbd5e1' }}>Occlusion (walls/furniture)</span>
+        <input type="checkbox" checked={occlusionOn} onChange={onToggleOcclusion} style={{ accentColor: '#a855f7' }} />
+      </label>
+      {canPlace && (
+        <button onClick={onTogglePlace}
+          style={{ width: '100%', marginTop: 6, padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            color: placeMode ? '#fff' : '#34d399',
+            background: placeMode ? 'linear-gradient(135deg,#10b981,#059669)' : 'rgba(16,185,129,0.1)',
+            border: '1px solid rgba(16,185,129,0.3)' }}>
+          {placeMode ? '📡 Click floor to place — done' : '📡 Place radar'}
+        </button>
+      )}
+      <p style={{ margin: '6px 0 0', fontSize: 9, color: '#64748b', lineHeight: 1.4 }}>Tilt −45° and mount height 2.40 m are fixed.</p>
+    </div>
+
     {/* Coverage readout */}
     <div style={panelBox}>
       <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#f1f5f9' }}>Coverage</p>
@@ -1028,6 +1112,11 @@ const SimPanels: React.FC<SimPanelsProps> = ({ readout, avatars, suggestions, ro
         )}
       </div>
       {suggestions.length > 0 && <p style={{ margin: '8px 0 0', fontSize: 10, color: '#94a3b8' }}>{suggestions.length} spot{suggestions.length > 1 ? 's' : ''} — click a marker to place a radar.</p>}
+      {gaps.length > 0 && (
+        <p style={{ margin: '6px 0 0', fontSize: 10, color: '#fbbf24' }}>
+          ⚠ Still not fully covered: {gaps.join(', ')}
+        </p>
+      )}
     </div>
 
     {/* Avatars */}
