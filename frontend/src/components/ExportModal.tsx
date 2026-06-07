@@ -6,11 +6,12 @@ interface Props {
   dark: boolean;
   objectsPreview?: Record<string, unknown>[] | null;
   marginWarnings?: string[] | null;
+  defaultLocation?: string;
 }
 
-export const ExportModal: React.FC<Props> = ({ onConfirm, onCancel, dark, objectsPreview, marginWarnings }) => {
+export const ExportModal: React.FC<Props> = ({ onConfirm, onCancel, dark, objectsPreview, marginWarnings, defaultLocation }) => {
   const [board,    setBoard]    = useState('');
-  const [location, setLocation] = useState('');
+  const [location, setLocation] = useState(defaultLocation ?? '');
 
   const bg          = dark ? '#0d1117'                : '#ffffff';
   const border      = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';

@@ -3,9 +3,48 @@ import { OBJECT_PRESETS, type ObjectType, type RoomConfig } from '../types';
 
 interface Props {
   room: RoomConfig;
+  roomName: string;
+  onRenameRoom: (name: string) => void;
   onRoomChange: (r: RoomConfig) => void;
   onAdd: (t: ObjectType) => void;
   dark: boolean;
+}
+
+// Editable room name — keeps local string state, commits on blur/Enter so the
+// tab label and room.name stay in sync without remounting mid-edit.
+function RoomNameField({ value, onCommit, dark, inputBg, border, textSm }: {
+  value: string; onCommit: (v: string) => void;
+  dark: boolean; inputBg: string; border: string; textSm: string;
+}) {
+  const [raw, setRaw] = useState(value);
+  const focused = useRef(false);
+
+  useEffect(() => { if (!focused.current) setRaw(value); }, [value]);
+
+  function commit(str: string) {
+    const clean = str.trim();
+    if (clean) onCommit(clean);
+    else setRaw(value); // revert blank
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label htmlFor="room-name" style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: textSm, textTransform: 'uppercase', marginBottom: 6 }}>
+        Room Name
+      </label>
+      <input
+        id="room-name"
+        type="text"
+        value={raw}
+        onChange={e => setRaw(e.target.value)}
+        onFocus={() => { focused.current = true; }}
+        onBlur={e => { focused.current = false; commit(e.target.value); }}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        placeholder="e.g. Kitchen"
+        style={{ width: '100%', background: inputBg, border: `1px solid ${border}`, borderRadius: 8, padding: '6px 10px', fontSize: 13, color: dark ? '#e2e8f0' : '#0f172a', fontFamily: 'inherit', outline: 'none' }}
+      />
+    </div>
+  );
 }
 
 // Standalone component so it keeps its own local string state without remounting
@@ -61,7 +100,7 @@ const CATEGORIES: { label: string; types: ObjectType[] }[] = [
   { label: 'Technology', types: ['radar', 'person', 'custom'] },
 ];
 
-export const ObjectPalette: React.FC<Props> = ({ room, onRoomChange, onAdd, dark }) => {
+export const ObjectPalette: React.FC<Props> = ({ room, roomName, onRenameRoom, onRoomChange, onAdd, dark }) => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const bg      = dark ? '#0d1117'              : '#ffffff';
@@ -75,8 +114,16 @@ export const ObjectPalette: React.FC<Props> = ({ room, onRoomChange, onAdd, dark
     <aside style={{ width: 220, background: bg, borderRight: `1px solid ${border}`, flexShrink: 0 }}
       className="flex flex-col overflow-hidden z-10"
     >
-      {/* Room Size */}
+      {/* Room Name + Size */}
       <div style={{ padding: '14px 14px 12px', borderBottom: `1px solid ${border}` }}>
+        <RoomNameField
+          value={roomName}
+          onCommit={onRenameRoom}
+          dark={dark}
+          inputBg={inputBg}
+          border={border}
+          textSm={textSm}
+        />
         <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: textSm, textTransform: 'uppercase', marginBottom: 10 }}>
           Room Size
         </p>

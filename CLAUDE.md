@@ -67,3 +67,27 @@ npm run test:e2e                # playwright e2e
 
 `.github/workflows/deploy.yml` deploys on push to `main`: frontend → GitHub
 Pages, backend → Google Cloud Run (`backend/Dockerfile`), then emails a status.
+
+## Claude skills
+
+A library of reusable agent skills lives at
+`/home/kcsn0008/Downloads/claude-skills-main` (each skill is a folder with a
+`SKILL.md`). When a task matches one, **read and apply the relevant skill** from
+there before improvising. If a skill name collides with a built-in/harness skill,
+prefer the built-in.
+
+Most relevant to this React + FastAPI + Three.js repo:
+
+- **Feature work** — `engineering-team/senior-frontend` (React/TS/Three.js UI),
+  `engineering-team/senior-backend` (FastAPI parsers/endpoints),
+  `engineering-team/senior-fullstack` (changes spanning both).
+- **Quality & tests** — `engineering-team/code-reviewer`,
+  `engineering-team/tdd-guide`, `engineering-team/senior-qa`,
+  `engineering-team/playwright-pro` (matches the Playwright e2e suite),
+  `engineering-team/a11y-audit` (the e2e suite already runs Axe checks).
+- **Ops & maintenance** — `engineering/codebase-onboarding`,
+  `engineering/focused-fix`, `engineering/dependency-auditor`,
+  `engineering/docker-development` (`backend/Dockerfile`,
+  `frontend/Dockerfile`), `engineering/ci-cd-pipeline-builder`
+  (`.github/workflows/deploy.yml`), `engineering/performance-profiler`,
+  `engineering/api-test-suite-builder` (the two import endpoints).

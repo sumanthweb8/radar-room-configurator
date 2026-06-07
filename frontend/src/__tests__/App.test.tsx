@@ -146,6 +146,6 @@ describe('App — export modal', () => {
     render(<App />);
     await user.click(screen.getByText('Bed'));
     await user.click(screen.getByText(/Export/));
-    expect(screen.getByText(/board/i)).toBeInTheDocument();
+    expect(screen.getByText('Export Config')).toBeInTheDocument();
   });
 });

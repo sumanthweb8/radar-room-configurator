@@ -48,6 +48,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [dark,       setDark]       = useState(true);
   const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
 
   // Add a radar at a plan-space centre (used by the simulator's Suggest feature).
   const addRadarAtCenter = useCallback((pos: { x: number; y: number }) => {
@@ -137,27 +138,26 @@ export default function App() {
   }
 
   function handleImportData(data: any) {
-    // ── Multi-room PDF import — create one new tab per room ──────────────────
-    if (data.rooms && Array.isArray(data.rooms)) {
+    // ── Multi-room import — one tab per room, replacing the current tabs ─────
+    if (data.rooms && Array.isArray(data.rooms) && data.rooms.length > 0) {
       const newTabs: TabState[] = data.rooms.map((r: any) => {
         const w = +(r.room.width  ?? 4);
         const h = +(r.room.height ?? 4);
         const area = (w * h).toFixed(2) + ' m²';
+        const name = r.room.name ?? 'Imported Room';
         return {
           id:           genId(),
-          label:        r.room.name ?? 'Imported Room',
+          label:        name,
           area,
-          room:         { name: r.room.name, width: w, height: h, polygon: r.room.polygon },
+          room:         { name, width: w, height: h, polygon: r.room.polygon },
           objects:      makeRoomObjects(r.objects),
           selectedId:   null,
           adjacentRooms: [],
         };
       });
-      setTabs(prev => {
-        const next = [...prev, ...newTabs];
-        setActiveIdx(next.length - 1); // jump to last imported tab
-        return next;
-      });
+      // Replace all existing tabs with the freshly imported rooms.
+      setTabs(newTabs);
+      setActiveIdx(0);
       setShowImport(false);
       return;
     }
@@ -171,6 +171,16 @@ export default function App() {
     });
     setShowImport(false);
     setViewer({ simulate: false });
+  }
+
+  // Rename a room: keeps the tab label and room.name in sync (used by both the
+  // palette name field and the double-click-to-rename tab). Blank names revert.
+  function handleRenameRoom(idx: number, name: string) {
+    const clean = name.trim();
+    if (!clean) return;
+    setTabs(prev => prev.map((t, i) => i === idx
+      ? { ...t, label: clean, room: { ...t.room, name: clean } }
+      : t));
   }
 
   function handleAddAdjacentRoom(doorId: string, wall: WallSide, width: number, height: number, roomType: AdjacentRoomType) {
@@ -359,11 +369,34 @@ export default function App() {
                   boxShadow: active ? '0 0 6px #6366f1' : 'none',
                   transition: 'all 0.15s',
                 }} />
-                <span style={{
-                  fontSize: 12, fontWeight: active ? 700 : 500,
-                  color: active ? (dark ? '#a5b4fc' : '#4f46e5') : textMuted,
-                  whiteSpace: 'nowrap',
-                }}>{t.label}</span>
+                {editingTabId === t.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={t.label}
+                    onClick={e => e.stopPropagation()}
+                    onBlur={e => { handleRenameRoom(idx, e.target.value); setEditingTabId(null); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { handleRenameRoom(idx, (e.target as HTMLInputElement).value); setEditingTabId(null); }
+                      else if (e.key === 'Escape') { setEditingTabId(null); }
+                    }}
+                    style={{
+                      fontSize: 12, fontWeight: 700, width: 100,
+                      color: dark ? '#a5b4fc' : '#4f46e5',
+                      background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      border: '1px solid rgba(99,102,241,0.5)', borderRadius: 5,
+                      padding: '1px 5px', outline: 'none', fontFamily: 'inherit',
+                    }}
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={e => { e.stopPropagation(); setEditingTabId(t.id); }}
+                    title="Double-click to rename"
+                    style={{
+                      fontSize: 12, fontWeight: active ? 700 : 500,
+                      color: active ? (dark ? '#a5b4fc' : '#4f46e5') : textMuted,
+                      whiteSpace: 'nowrap',
+                    }}>{t.label}</span>
+                )}
                 <span style={{
                   fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 99,
                   background: active ? 'rgba(99,102,241,0.2)' : (dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'),
@@ -407,7 +440,7 @@ export default function App() {
 
       {/* ── Main layout ── */}
       <div className="flex flex-1 overflow-hidden">
-        <ObjectPalette room={room} onRoomChange={r => patchTab({ room: r })} onAdd={handleAdd} dark={dark} />
+        <ObjectPalette room={room} roomName={tab.label} onRenameRoom={name => handleRenameRoom(activeIdx, name)} onRoomChange={r => patchTab({ room: r })} onAdd={handleAdd} dark={dark} />
 
         <main className="flex-1 relative overflow-hidden">
           <RoomEditor
@@ -447,7 +480,7 @@ export default function App() {
       )}
 
       {showExport && (
-        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} objectsPreview={exportPreview} marginWarnings={marginAlert} />
+        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} objectsPreview={exportPreview} marginWarnings={marginAlert} defaultLocation={room.name} />
       )}
     </div>
   );
