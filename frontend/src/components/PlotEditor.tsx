@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RoomConfig, RoomObject } from '../types';
-import { radarFrame, buildZone, assembleConfig, type ConfigObject } from '../exportConfig';
+import { radarFrame, buildZone, assembleConfig, CONFIG_TYPES, type ConfigObject } from '../exportConfig';
 
 interface Props {
   room: RoomConfig;
@@ -22,14 +22,14 @@ const r3 = (v: number) => +v.toFixed(3);
 
 function initObjs(objects: RoomObject[], room: RoomConfig): PlotObj[] {
   const { toLocal } = radarFrame(objects, room);
-  let doorIdx = 0;
-  return objects.filter(o => o.type !== 'radar').map(o => {
+  let doorIdx = 0, sofaIdx = 0;
+  return objects.filter(o => (CONFIG_TYPES as readonly string[]).includes(o.type)).map(o => {
     const corners: [number, number][] = [
       [o.x, o.y], [o.x + o.width, o.y], [o.x, o.y + o.height], [o.x + o.width, o.y + o.height],
     ];
     const t = corners.map(([rx, ry]) => toLocal(rx, ry));
     const xs = t.map(c => c[0]), ys = t.map(c => c[1]);
-    const name = o.type === 'door' ? `door${++doorIdx}` : o.type === 'bed' ? 'bed' : (o.label || o.type);
+    const name = o.type === 'door' ? `door${++doorIdx}` : o.type === 'sofa' ? `sofa${++sofaIdx}` : 'bed';
     return {
       id: o.id, name, type: o.type, color: o.color,
       minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys),
@@ -59,10 +59,11 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
 
   const [zone, setZone] = useState<[number, number][]>(() => buildZone(objects, room).zone as [number, number][]);
   const [pobjs, setPobjs] = useState<PlotObj[]>(() => initObjs(objects, room));
-  const [shown, setShown] = useState<Set<string>>(() => new Set(initObjs(objects, room).filter(p => p.type === 'bed' || p.type === 'door').map(p => p.id)));
+  const [shown, setShown] = useState<Set<string>>(() => new Set(initObjs(objects, room).map(p => p.id)));
   const [sel, setSel] = useState<{ kind: 'vertex'; i: number } | { kind: 'obj'; id: string } | null>(null);
   const [board, setBoard] = useState('');
   const [location, setLocation] = useState('');
+  const [viewTab, setViewTab] = useState<'config' | 'zone'>('config');
   const dragRef = useRef<Drag | null>(null);
 
   useEffect(() => {
@@ -84,6 +85,27 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
     const pad = 0.4;
     return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad, w: (maxX - minX) + 2 * pad, h: (maxY - minY) + 2 * pad };
   }, [zone, visObjs]);
+
+  // Live config + zone, rebuilt on every edit (drag/resize/margin/vertex).
+  const serialized = useMemo<ConfigObject[]>(() =>
+    visObjs.filter(p => (CONFIG_TYPES as readonly string[]).includes(p.type)).map(p => {
+      const entry: ConfigObject = {
+        name: p.name, type: p.type,
+        top_left: [r3(p.minX), r3(p.maxY)], top_right: [r3(p.maxX), r3(p.maxY)],
+        bottom_left: [r3(p.minX), r3(p.minY)], bottom_right: [r3(p.maxX), r3(p.minY)],
+        margin_top: r3(p.mTop), margin_bottom: r3(p.mBottom), margin_left: r3(p.mLeft), margin_right: r3(p.mRight),
+      };
+      if (p.type === 'bed') { entry.top_height = 0.5; entry.bottom_height = 0.5; entry.right_width = 0.5; entry.left_width = 0.5; }
+      return entry;
+    }), [visObjs]);
+
+  const liveConfig = useMemo(() => {
+    const c = assembleConfig(serialized, board.trim() || '<board>', location.trim() || '<location>') as Record<string, unknown>;
+    delete c._clampedMargins;
+    return c;
+  }, [serialized, board, location]);
+
+  const liveZone = useMemo(() => ({ zone: zone.map(([x, y]) => [r3(x), r3(y)]) }), [zone]);
 
   const PAD = 52;
   const scale = Math.min((size.w - 2 * PAD) / (bounds.w || 1), (size.h - 2 * PAD) / (bounds.h || 1));
@@ -179,20 +201,10 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
 
   function download() {
     const base = `${board.trim()}_${(room.name || 'room').replace(/\s+/g, '_')}`;
-    const serialized: ConfigObject[] = visObjs.filter(p => p.type === 'bed' || p.type === 'door').map(p => {
-      const entry: ConfigObject = {
-        name: p.name, type: p.type,
-        top_left: [r3(p.minX), r3(p.maxY)], top_right: [r3(p.maxX), r3(p.maxY)],
-        bottom_left: [r3(p.minX), r3(p.minY)], bottom_right: [r3(p.maxX), r3(p.minY)],
-        margin_top: r3(p.mTop), margin_bottom: r3(p.mBottom), margin_left: r3(p.mLeft), margin_right: r3(p.mRight),
-      };
-      if (p.type === 'bed') { entry.top_height = 0.5; entry.bottom_height = 0.5; entry.right_width = 0.5; entry.left_width = 0.5; }
-      return entry;
-    });
-    const config = assembleConfig(serialized, board.trim(), location.trim()) as any;
+    const config = assembleConfig(serialized, board.trim(), location.trim()) as Record<string, unknown>;
     delete config._clampedMargins;
     downloadJson(config, `${base}_config.json`);
-    setTimeout(() => downloadJson({ zone: zone.map(([x, y]) => [x, y]) }, `${base}_zone.json`), 150);
+    setTimeout(() => downloadJson(liveZone, `${base}_zone.json`), 150);
   }
 
   const handle = (mx: number, my: number, key: string, fill: string, d: Drag, shape: 'rect' | 'circle' = 'rect') => {
@@ -267,24 +279,41 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
         </div>
 
         {/* Side panel */}
-        <div style={{ width: 260, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)', background: dark ? 'rgba(8,13,22,0.98)' : '#f8fafc', padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ width: 340, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)', background: dark ? 'rgba(8,13,22,0.98)' : '#f8fafc', padding: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>▣ Plot</p>
             <button onClick={onClose} style={{ padding: '4px 10px', borderRadius: 7, fontSize: 12, color: txt, background: 'transparent', border: `1px solid ${grid}`, cursor: 'pointer' }}>✕ Close</button>
           </div>
-          <p style={{ margin: 0, fontSize: 10, color: txt, lineHeight: 1.6 }}>Drag vertices, objects, corners (resize) and the dashed margin handles. Double-click a zone edge to add a vertex; select a vertex and press Delete to remove. Edits affect the downloaded JSON only.</p>
+          <p style={{ margin: 0, fontSize: 10, color: txt, lineHeight: 1.6 }}>Drag objects, corners (resize) and the dashed margin handles; drag zone vertices (double-click an edge to add one). The config + zone below update live.</p>
 
           <div>
             <p style={{ margin: '0 0 6px', fontSize: 11, fontWeight: 700, color: dark ? '#e2e8f0' : '#0f172a' }}>Objects</p>
-            <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <div style={{ maxHeight: 96, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {pobjs.length === 0 && <span style={{ fontSize: 10, color: txt }}>No bed / door / sofa in this room.</span>}
               {pobjs.map(p => (
                 <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: dark ? '#cbd5e1' : '#334155', cursor: 'pointer' }}>
                   <input type="checkbox" checked={shown.has(p.id)} onChange={() => setShown(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} style={{ accentColor: p.color }} />
                   <span style={{ color: p.color }}>{p.name}</span>
-                  {!(p.type === 'bed' || p.type === 'door') && <span style={{ fontSize: 9, color: txt }}>(not in config)</span>}
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Live config / zone viewer */}
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: dark ? '#e2e8f0' : '#0f172a', marginRight: 'auto' }}>Live preview</p>
+              {(['config', 'zone'] as const).map(tab => (
+                <button key={tab} onClick={() => setViewTab(tab)}
+                  style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 700, textTransform: 'capitalize', cursor: 'pointer',
+                    color: viewTab === tab ? '#fff' : txt,
+                    background: viewTab === tab ? 'linear-gradient(135deg,#6366f1,#8b5cf6)' : 'transparent',
+                    border: `1px solid ${viewTab === tab ? 'transparent' : grid}` }}>{tab}</button>
+              ))}
+            </div>
+            <pre style={{ margin: 0, flex: 1, overflow: 'auto', background: dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.04)', border: `1px solid ${grid}`, borderRadius: 8, padding: 10, fontSize: 10, lineHeight: 1.5, color: dark ? '#a5b4fc' : '#334155', fontFamily: 'monospace', whiteSpace: 'pre' }}>
+              {JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2)}
+            </pre>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

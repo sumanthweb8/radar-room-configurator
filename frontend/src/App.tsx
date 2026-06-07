@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
 import { OBJECT_PRESETS } from './types';
-import { buildConfig, buildZone } from './exportConfig';
+import { buildConfig, buildZone, CONFIG_TYPES } from './exportConfig';
 import { RoomEditor } from './components/RoomEditor';
 import { ObjectPalette } from './components/ObjectPalette';
 import { PropertiesPanel } from './components/PropertiesPanel';
@@ -84,7 +84,7 @@ export default function App() {
   // Detect margin overlaps whenever objects change (from import, add, move, etc.)
   const [exportPreview, setExportPreview] = useState<Record<string, unknown>[] | null>(null);
   useEffect(() => {
-    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+    const exportable = objects.filter(o => (CONFIG_TYPES as readonly string[]).includes(o.type));
     if (exportable.length < 2) { setMarginAlert(null); setExportPreview(null); return; }
     const config = buildConfig(objects, '<board>', room.name || '', room) as any;
     const clamped: string[] = config._clampedMargins || [];

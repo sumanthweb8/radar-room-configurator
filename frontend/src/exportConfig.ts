@@ -12,6 +12,9 @@ import { getRadarFacing } from './types';
 
 export type ConfigObject = Record<string, unknown>;
 
+/** Object types written into the device config (and editable in the Plot). */
+export const CONFIG_TYPES = ['bed', 'door', 'sofa'] as const;
+
 /** Radar-local frame: origin at the radar centre, right ⊥ forward (unit). */
 export function radarFrame(objects: RoomObject[], room: RoomConfig) {
   const radar = objects.find(o => o.type === 'radar');
@@ -26,11 +29,11 @@ export function radarFrame(objects: RoomObject[], room: RoomConfig) {
   return { originX, originY, fwd_x, fwd_y, right_x, right_y, toLocal };
 }
 
-/** Per-object radar-local boxes + margins (beds + doors), as config entries. */
+/** Per-object radar-local boxes + margins (beds, doors, sofas), as config entries. */
 export function serializeRadarLocal(objects: RoomObject[], room: RoomConfig): ConfigObject[] {
   const { toLocal } = radarFrame(objects, room);
-  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
-  let doorIdx = 0;
+  const exportable = objects.filter(o => (CONFIG_TYPES as readonly string[]).includes(o.type));
+  let doorIdx = 0, sofaIdx = 0;
   return exportable.map(obj => {
     const corners: [number, number][] = [
       [obj.x, obj.y], [obj.x + obj.width, obj.y],
@@ -44,7 +47,7 @@ export function serializeRadarLocal(objects: RoomObject[], room: RoomConfig): Co
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
 
-    const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+    const name = obj.type === 'door' ? `door${++doorIdx}` : obj.type === 'sofa' ? `sofa${++sofaIdx}` : 'bed';
     const entry: ConfigObject = {
       name,
       type: obj.type,
