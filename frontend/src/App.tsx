@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
 import { OBJECT_PRESETS } from './types';
-import { buildConfig, buildZone, CONFIG_TYPES } from './exportConfig';
+import { buildConfig, buildZone, prettyJson, CONFIG_TYPES } from './exportConfig';
 import { RoomEditor } from './components/RoomEditor';
 import { ObjectPalette } from './components/ObjectPalette';
 import { PropertiesPanel } from './components/PropertiesPanel';
@@ -230,7 +230,7 @@ export default function App() {
   }
 
   function downloadJson(data: unknown, filename: string) {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const blob = new Blob([prettyJson(data)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url;

@@ -148,6 +148,29 @@ export function buildConfig(objects: RoomObject[], board: string, location: stri
   return assembleConfig(serializeRadarLocal(objects, room), board, location);
 }
 
+/**
+ * Pretty-print JSON but keep arrays of primitives on a single line, e.g.
+ *   "top_left": [3.681, -4.382]   instead of one number per line.
+ * Objects and arrays-of-arrays/objects stay indented.
+ */
+export function prettyJson(value: unknown, indent = 2, level = 0): string {
+  const pad = ' '.repeat(indent * level);
+  const padIn = ' '.repeat(indent * (level + 1));
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    if (value.every(v => v === null || typeof v !== 'object')) {
+      return '[' + value.map(v => JSON.stringify(v)).join(', ') + ']';
+    }
+    return '[\n' + value.map(v => padIn + prettyJson(v, indent, level + 1)).join(',\n') + '\n' + pad + ']';
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return '{}';
+    return '{\n' + entries.map(([k, v]) => padIn + JSON.stringify(k) + ': ' + prettyJson(v, indent, level + 1)).join(',\n') + '\n' + pad + '}';
+  }
+  return JSON.stringify(value);
+}
+
 /** Room boundary polygon in the radar-local frame (radar at 0,0). Full precision. */
 export function buildZone(objects: RoomObject[], room: RoomConfig): { zone: number[][] } {
   const { toLocal } = radarFrame(objects, room);

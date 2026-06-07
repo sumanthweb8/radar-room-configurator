@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RoomConfig, RoomObject } from '../types';
-import { radarFrame, buildZone, assembleConfig, CONFIG_TYPES, type ConfigObject } from '../exportConfig';
+import { radarFrame, buildZone, assembleConfig, prettyJson, CONFIG_TYPES, type ConfigObject } from '../exportConfig';
 
 interface Props {
   room: RoomConfig;
@@ -39,7 +39,7 @@ function initObjs(objects: RoomObject[], room: RoomConfig): PlotObj[] {
 }
 
 function downloadJson(data: unknown, filename: string) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const blob = new Blob([prettyJson(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename; a.click();
@@ -114,7 +114,7 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
   // the user is actively typing in it (so their edits aren't clobbered mid-keystroke).
   useEffect(() => {
     if (taFocused.current) return;
-    setDraft(JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2));
+    setDraft(prettyJson(viewTab === 'config' ? liveConfig : liveZone));
     setJsonErr(null);
   }, [liveConfig, liveZone, viewTab]);
 
@@ -363,7 +363,7 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
               value={draft}
               spellCheck={false}
               onFocus={() => { taFocused.current = true; }}
-              onBlur={() => { taFocused.current = false; setDraft(JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2)); setJsonErr(null); }}
+              onBlur={() => { taFocused.current = false; setDraft(prettyJson(viewTab === 'config' ? liveConfig : liveZone)); setJsonErr(null); }}
               onChange={e => applyDraft(e.target.value)}
               style={{ margin: 0, flex: 1, minHeight: 160, resize: 'none', overflow: 'auto', background: dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.04)', border: `1px solid ${jsonErr ? 'rgba(239,68,68,0.6)' : grid}`, borderRadius: 8, padding: 10, fontSize: 10, lineHeight: 1.5, color: dark ? '#a5b4fc' : '#334155', fontFamily: 'monospace', whiteSpace: 'pre', outline: 'none', tabSize: 2 }}
             />
