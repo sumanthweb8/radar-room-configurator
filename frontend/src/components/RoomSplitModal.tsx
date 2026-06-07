@@ -50,7 +50,7 @@ export const RoomSplitModal: React.FC<Props> = ({ room, objects, dark, onSplit, 
   const toPx = (mx: number, my: number): [number, number] => [PAD + (mx - bounds.minX) * scale, PAD + (my - bounds.minY) * scale];
   const toM = (px: number, py: number): [number, number] => [(px - PAD) / scale + bounds.minX, (py - PAD) / scale + bounds.minY];
 
-  function pointerM(e: React.PointerEvent | PointerEvent): Pt {
+  function pointerM(e: { clientX: number; clientY: number }): Pt {
     const rect = svgRef.current!.getBoundingClientRect();
     const [mx, my] = toM(e.clientX - rect.left, e.clientY - rect.top);
     return [snap(mx), snap(my)];
@@ -94,6 +94,17 @@ export const RoomSplitModal: React.FC<Props> = ({ room, objects, dark, onSplit, 
   // Click empty canvas → append a point to the divider.
   function onCanvasDown(e: React.PointerEvent) {
     setLine(l => [...l, pointerM(e)]);
+  }
+  // Delete a single point.
+  function removePoint(i: number) {
+    setLine(l => l.filter((_, idx) => idx !== i));
+    setSel(null);
+  }
+  // Insert a point into segment i→i+1 at the clicked position.
+  function insertOnEdge(i: number, e: React.MouseEvent) {
+    const p = pointerM(e);
+    setLine(l => { const next = [...l]; next.splice(i + 1, 0, p); return next; });
+    setSel(i + 1);
   }
 
   useEffect(() => {
@@ -155,12 +166,20 @@ export const RoomSplitModal: React.FC<Props> = ({ room, objects, dark, onSplit, 
             {line.length >= 2 && (
               <polyline points={line.map(([x, y]) => toPx(x, y).join(',')).join(' ')} fill="none" stroke="#f59e0b" strokeWidth={2.5} strokeDasharray="6 4" pointerEvents="none" />
             )}
-            {/* divider points */}
+            {/* segment hit-lines — double-click to insert a point in between */}
+            {line.map((p, i) => {
+              if (i === line.length - 1) return null;
+              const [ax, ay] = toPx(p[0], p[1]);
+              const [bx, by] = toPx(line[i + 1][0], line[i + 1][1]);
+              return <line key={`e${i}`} x1={ax} y1={ay} x2={bx} y2={by} stroke="transparent" strokeWidth={14}
+                style={{ cursor: 'copy' }} onPointerDown={e => e.stopPropagation()} onDoubleClick={e => insertOnEdge(i, e)} />;
+            })}
+            {/* divider points — drag to move, double-click to delete */}
             {line.map((p, i) => {
               const [px, py] = toPx(p[0], p[1]);
               const isEnd = i === 0 || i === line.length - 1;
               return <circle key={i} cx={px} cy={py} r={6} fill={sel === i ? '#f59e0b' : isEnd ? '#ef4444' : '#fbbf24'} stroke="#fff" strokeWidth={1.4}
-                style={{ cursor: 'grab' }} onPointerDown={e => startDrag(i, e)} />;
+                style={{ cursor: 'grab' }} onPointerDown={e => startDrag(i, e)} onDoubleClick={e => { e.stopPropagation(); removePoint(i); }} />;
             })}
           </svg>
         </div>
@@ -172,7 +191,10 @@ export const RoomSplitModal: React.FC<Props> = ({ room, objects, dark, onSplit, 
             <button onClick={onCancel} style={{ padding: '4px 10px', borderRadius: 7, fontSize: 12, color: txt, background: 'transparent', border: `1px solid ${grid}`, cursor: 'pointer' }}>✕ Close</button>
           </div>
           <p style={{ margin: 0, fontSize: 10, color: txt, lineHeight: 1.6 }}>
-            Click to drop divider points from one wall to another (a multi-segment line is fine). Drag a point to adjust; select one and press Delete to remove. Start and end on the room walls. The original room is kept; two new rooms are added.
+            <b>Add:</b> click empty space to drop a point at the end, or double-click a segment to insert one between.<br />
+            <b>Move:</b> drag a point.<br />
+            <b>Delete:</b> double-click a point (or select it and press Delete / the button below).<br />
+            Start and end on the room walls. The original room is kept; two new rooms are added.
           </p>
 
           {preview ? (
@@ -191,8 +213,14 @@ export const RoomSplitModal: React.FC<Props> = ({ room, objects, dark, onSplit, 
               style={{ background: dark ? 'rgba(255,255,255,0.05)' : '#fff', border: `1px solid ${grid}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, color: dark ? '#e2e8f0' : '#0f172a' }} />
           </div>
 
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => sel != null && removePoint(sel)} disabled={sel == null}
+              style={{ padding: '8px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600, color: sel == null ? txt : '#f87171', background: 'transparent', border: `1px solid ${sel == null ? grid : 'rgba(248,113,113,0.4)'}`, cursor: sel == null ? 'not-allowed' : 'pointer', opacity: sel == null ? 0.5 : 1 }}>
+              ✕ Delete point
+            </button>
             <button onClick={() => { setLine([]); setSel(null); }} style={{ padding: '8px 12px', borderRadius: 8, fontSize: 11, color: txt, background: 'transparent', border: `1px solid ${grid}`, cursor: 'pointer' }}>Reset line</button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => canSplit && onSplit(line, name1.trim(), name2.trim())} disabled={!canSplit}
               style={{ flex: 1, padding: '9px 0', borderRadius: 9, border: 'none', fontSize: 12, fontWeight: 700, color: '#fff', cursor: canSplit ? 'pointer' : 'not-allowed', opacity: canSplit ? 1 : 0.45, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
               ✂ Split into two rooms
