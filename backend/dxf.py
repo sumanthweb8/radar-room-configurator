@@ -38,15 +38,6 @@ _LABEL_LAYERS   = {"space annotation"}
 _OPENING_LABEL_LAYERS = {"other annotation"}
 _ASSET_LABEL_LAYERS   = {"assets annotation", "amrax objects annotation"}
 
-# Per-room label MTEXT — one per room, positioned inside it. Used to detect how
-# many rooms a multi-room floor plan contains (and to seed the room split).
-_ROOM_LABEL_LAYERS = {"space annotation", "room annotation"}
-
-# A geometry LWPOLYLINE counts as a *room perimeter* (rather than a thin wall
-# slab) only if both its bbox dimensions exceed this. Wall slabs are ~0.25 m
-# thick in one axis.
-_MIN_ROOM_DIM = 0.35
-
 # Asset-label → frontend ObjectType. Labels not listed here fall through to
 # 'custom' so the rectangle still imports — just with the generic shape.
 _ASSET_TYPE_MAP = {
@@ -144,49 +135,6 @@ def _shoelace_area(pts: List[Tuple[float, float]]) -> float:
     return abs(s) / 2.0
 
 
-# ───────────────────────── geometry kernel ──────────────────────────
-
-def _point_in_polygon(pt: Tuple[float, float], poly: List[Tuple[float, float]]) -> bool:
-    """Ray-casting point-in-polygon test (pure Python — shapely is banned)."""
-    x, y = pt
-    n = len(poly)
-    if n < 3:
-        return False
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = poly[i]
-        xj, yj = poly[j]
-        if ((yi > y) != (yj > y)) and \
-           (x < (xj - xi) * (y - yi) / (yj - yi + 1e-18) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _dist_point_to_segment(
-    p: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float],
-) -> float:
-    """Shortest distance from point ``p`` to segment ``a``→``b``."""
-    px, py = p
-    ax, ay = a
-    bx, by = b
-    dx, dy = bx - ax, by - ay
-    if dx == 0 and dy == 0:
-        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-    cx, cy = ax + t * dx, ay + t * dy
-    return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
-
-
-def _dist_point_to_polygon(pt: Tuple[float, float], poly: List[Tuple[float, float]]) -> float:
-    """Minimum distance from ``pt`` to any edge of ``poly``."""
-    n = len(poly)
-    if n < 2:
-        return float("inf")
-    return min(_dist_point_to_segment(pt, poly[i], poly[(i + 1) % n]) for i in range(n))
-
-
 # ───────────────────────── public API ──────────────────────────
 
 def is_dxf(file_bytes: bytes) -> bool:
@@ -197,14 +145,11 @@ def is_dxf(file_bytes: bytes) -> bool:
 
 def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
     """
-    Parse a DXF into the MetaroomReport shape.
+    Parse a single-room DXF into the MetaroomReport shape.
 
-    Multi-room floor plans carry one label MTEXT per room (layer
-    `Room Annotation` / `Space Annotation`). When two or more such seeds resolve
-    to distinct perimeter polygons we split the plan into one Room each, routing
-    every opening and asset to the room it belongs to. Single-room files (one or
-    zero seeds) fall through to :func:`_parse_single_room`, which preserves the
-    original whole-floor behaviour exactly.
+    Returns one Room whose width/height is the wall bounding box (in metres)
+    and whose `objects` list holds each opening on the `Other` layer as a
+    door/window RoomObject placed in room-local coordinates.
     """
     text = dxf_bytes.decode("utf-8", errors="replace") if not _looks_binary(dxf_bytes) else None
     if text is None:
@@ -213,56 +158,6 @@ def parse_dxf(dxf_bytes: bytes) -> MetaroomReport:
     doc = ezdxf.read(io.StringIO(text))
     ms = doc.modelspace()
 
-    seeds = _collect_room_seeds(ms)
-    candidates = _collect_room_candidates(ms)
-    matched = _match_seeds_to_rooms(seeds, candidates) if seeds else []
-
-    if len(matched) <= 1:
-        return _parse_single_room(ms)
-
-    # ── multi-room path ─────────────────────────────────────────────────────
-    opening_anns = _opening_annotations(ms)
-    opening_bbs  = _opening_bboxes(ms)
-    asset_items  = _asset_items(ms)
-
-    # Route each opening/asset to its owning room (raw DXF coordinate space).
-    opens_per_room  = [[] for _ in matched]  # type: List[List[BBox]]
-    assets_per_room = [[] for _ in matched]  # type: List[List[Tuple[BBox, str]]]
-
-    for bb in opening_bbs:
-        idx = _route_opening(bb, matched)
-        if idx is not None:
-            opens_per_room[idx].append(bb)
-    for item in asset_items:
-        idx = _route_asset(item[0], matched)
-        if idx is not None:
-            assets_per_room[idx].append(item)
-
-    rooms: List[Room] = []
-    for i, cand in enumerate(matched, start=0):
-        pts, bbox, w_m, h_m, _area = cand
-        polygon = _room_polygon_local(pts, bbox)
-        objects = [_opening_to_object(bb, bbox, opening_anns) for bb in opens_per_room[i]]
-        for item in assets_per_room[i]:
-            obj = _asset_to_object(item, bbox)
-            if obj is not None:
-                objects.append(obj)
-        rooms.append(Room(
-            name=f"Room {i + 1}",
-            width=round(w_m, 3),
-            height=round(h_m, 3),
-            objects=objects,
-            polygon=polygon,
-        ))
-    return MetaroomReport(floor=None, rooms=rooms)
-
-
-def _parse_single_room(ms) -> MetaroomReport:
-    """
-    Original single-room behaviour: the whole floor is treated as one Room whose
-    size is the largest-perimeter bounding box, with every opening and asset
-    placed in it. Used as the fallback when a plan has no usable room seeds.
-    """
     wall_bbox, wall_pts = _collect_wall_bbox(ms)
     if wall_bbox is None:
         return MetaroomReport(floor=None, rooms=[])
@@ -270,7 +165,18 @@ def _parse_single_room(ms) -> MetaroomReport:
     room_w_m = x1 - x0
     room_h_m = y1 - y0
 
-    polygon = _room_polygon_local(wall_pts, wall_bbox) if wall_pts and len(wall_pts) > 4 else None
+    # Convert DXF polygon (Y-up) to room-local (Y-down, origin top-left).
+    polygon = None
+    if wall_pts and len(wall_pts) > 4:
+        poly_local = [
+            (round(px - x0, 3), round(room_h_m - (py - y0), 3))
+            for px, py in wall_pts
+        ]
+        # Only use polygon if the room is non-rectangular (area < 95% of bbox).
+        poly_area = _shoelace_area(poly_local)
+        bbox_area = room_w_m * room_h_m
+        if poly_area < bbox_area * 0.95:
+            polygon = _simplify_polygon(poly_local, room_w_m, room_h_m)
 
     name = _extract_room_name(ms) or "Room"
     openings = _collect_openings(ms, wall_bbox)
@@ -284,130 +190,6 @@ def _parse_single_room(ms) -> MetaroomReport:
         polygon=polygon,
     )
     return MetaroomReport(floor=None, rooms=[room])
-
-
-def _room_polygon_local(
-    wall_pts: Optional[List[Tuple[float, float]]], wall_bbox: BBox,
-) -> Optional[List[Tuple[float, float]]]:
-    """
-    Convert a raw DXF perimeter (Y-up) to a room-local polygon (Y-down, origin
-    top-left), returning it only when the room is non-rectangular (polygon area
-    < 95 % of its bounding box). Returns None for rectangular rooms.
-    """
-    if not wall_pts or len(wall_pts) <= 4:
-        return None
-    x0, y0, x1, y1 = wall_bbox
-    room_w_m = x1 - x0
-    room_h_m = y1 - y0
-    poly_local = [
-        (round(px - x0, 3), round(room_h_m - (py - y0), 3))
-        for px, py in wall_pts
-    ]
-    poly_area = _shoelace_area(poly_local)
-    bbox_area = room_w_m * room_h_m
-    if poly_area < bbox_area * 0.95:
-        return _simplify_polygon(poly_local, room_w_m, room_h_m)
-    return None
-
-
-# ───────────────────────── room detection ──────────────────────────
-
-# A matched room: (raw_dxf_points, bbox, width, height, shoelace_area)
-_RoomCandidate = Tuple[List[Tuple[float, float]], BBox, float, float, float]
-
-
-def _collect_room_seeds(ms) -> List[Tuple[Tuple[float, float], str]]:
-    """Each room-label MTEXT as ((x, y), raw_text). One per room, in file order."""
-    seeds: List[Tuple[Tuple[float, float], str]] = []
-    for e in ms:
-        if e.dxftype() != "MTEXT":
-            continue
-        if not _layer_matches(e.dxf.layer, _ROOM_LABEL_LAYERS):
-            continue
-        ins = e.dxf.insert
-        seeds.append(((float(ins.x), float(ins.y)), e.text or ""))
-    return seeds
-
-
-def _collect_room_candidates(ms) -> List[_RoomCandidate]:
-    """Every Geometry LWPOLYLINE big enough to be a room perimeter (not a wall slab)."""
-    cands: List[_RoomCandidate] = []
-    for e in ms:
-        if not _layer_matches(e.dxf.layer, _WALL_LAYERS):
-            continue
-        if e.dxftype() != "LWPOLYLINE":
-            continue
-        pts = _poly_xy(e)
-        if len(pts) < 3:
-            continue
-        bb = _bbox_of_points(pts)
-        if bb is None:
-            continue
-        w, h = bb[2] - bb[0], bb[3] - bb[1]
-        if min(w, h) <= _MIN_ROOM_DIM:
-            continue
-        cands.append((pts, bb, w, h, _shoelace_area(pts)))
-    return cands
-
-
-def _bbox_close(a: BBox, b: BBox, tol: float = 0.02) -> bool:
-    return all(abs(x - y) <= tol for x, y in zip(a, b))
-
-
-def _match_seeds_to_rooms(
-    seeds: List[Tuple[Tuple[float, float], str]],
-    candidates: List[_RoomCandidate],
-) -> List[_RoomCandidate]:
-    """
-    For each seed, the smallest-area candidate polygon that contains it. Skips
-    seeds that land in no polygon and suppresses duplicate polygons (two seeds in
-    the same room, or a perimeter drawn twice). Seed order is preserved so the
-    resulting rooms number stably as "Room 1", "Room 2", …
-    """
-    rooms: List[_RoomCandidate] = []
-    used: List[BBox] = []
-    for pt, _raw in seeds:
-        containing = [c for c in candidates if _point_in_polygon(pt, c[0])]
-        if not containing:
-            continue
-        best = min(containing, key=lambda c: c[4])  # smallest shoelace area
-        if any(_bbox_close(best[1], u) for u in used):
-            continue
-        used.append(best[1])
-        rooms.append(best)
-    return rooms
-
-
-def _route_opening(bb: BBox, rooms: List[_RoomCandidate]) -> Optional[int]:
-    """Index of the room whose perimeter edge is nearest the opening centroid.
-
-    Openings sit *on* a wall, so their centroid lies outside the inner perimeter;
-    nearest-edge distance (not containment) picks the owning room. Ties on a
-    shared interior wall break toward the smaller-area room (deterministic).
-    """
-    if not rooms:
-        return None
-    cx = (bb[0] + bb[2]) / 2
-    cy = (bb[1] + bb[3]) / 2
-    return min(
-        range(len(rooms)),
-        key=lambda i: (round(_dist_point_to_polygon((cx, cy), rooms[i][0]), 4), rooms[i][4]),
-    )
-
-
-def _route_asset(bb: BBox, rooms: List[_RoomCandidate]) -> Optional[int]:
-    """Index of the room containing the asset centroid; falls back to nearest edge."""
-    if not rooms:
-        return None
-    cx = (bb[0] + bb[2]) / 2
-    cy = (bb[1] + bb[3]) / 2
-    containing = [i for i in range(len(rooms)) if _point_in_polygon((cx, cy), rooms[i][0])]
-    if containing:
-        return min(containing, key=lambda i: rooms[i][4])  # smallest-area on overlap
-    return min(
-        range(len(rooms)),
-        key=lambda i: (round(_dist_point_to_polygon((cx, cy), rooms[i][0]), 4), rooms[i][4]),
-    )
 
 
 # ───────────────────────── geometry helpers ──────────────────────────
@@ -494,8 +276,19 @@ def _extract_room_name(ms) -> Optional[str]:
     return None
 
 
-def _opening_bboxes(ms) -> List[BBox]:
-    """Deduped bounding boxes (raw DXF coords) of every opening on the `Other` layer."""
+def _collect_openings(ms, wall_bbox: BBox) -> List[RoomObject]:
+    """
+    Walk LWPOLYLINEs on the `Other` layer, dedupe near-coincident copies, and
+    emit one RoomObject per opening in room-local coordinates.
+
+    Room-local frame:
+      • origin (0, 0) at the top-left of the wall bounding box
+      • x axis rightward, y axis downward (SVG convention)
+    DXF is CAD-convention (Y-up), so we flip Y when translating.
+    """
+    rx0, ry0, rx1, ry1 = wall_bbox
+    room_h_m = ry1 - ry0
+
     raw_bboxes: List[BBox] = []
     for e in ms:
         if not _layer_matches(e.dxf.layer, _OPENING_LAYERS):
@@ -509,11 +302,12 @@ def _opening_bboxes(ms) -> List[BBox]:
         if (bb[2] - bb[0]) < 0.01 and (bb[3] - bb[1]) < 0.01:
             continue
         raw_bboxes.append(bb)
-    return _dedupe_near_coincident(raw_bboxes, dist_tol=0.01)
 
+    deduped = _dedupe_near_coincident(raw_bboxes, dist_tol=0.01)
 
-def _opening_annotations(ms) -> List[Tuple[Tuple[float, float], str]]:
-    """The "Door area" / "Window area" TEXTs near each opening, as ((x, y), label)."""
+    # The opening-annotation TEXTs ("Door area" / "Window area") sit *near*
+    # each opening — use them to label the object type. For each opening,
+    # find the nearest annotation centre.
     annotations: List[Tuple[Tuple[float, float], str]] = []
     for e in ms:
         if e.dxftype() != "TEXT":
@@ -521,49 +315,32 @@ def _opening_annotations(ms) -> List[Tuple[Tuple[float, float], str]]:
         if not _layer_matches(e.dxf.layer, _OPENING_LABEL_LAYERS):
             continue
         ins = e.dxf.insert
-        annotations.append(((float(ins.x), float(ins.y)), (e.dxf.text or "").strip()))
-    return annotations
+        label = (e.dxf.text or "").strip()
+        annotations.append(((float(ins.x), float(ins.y)), label))
 
-
-def _opening_to_object(
-    bb: BBox, wall_bbox: BBox, annotations: List[Tuple[Tuple[float, float], str]],
-) -> RoomObject:
-    """
-    Convert one opening bbox to a RoomObject in the owning room's local frame.
-
-    Room-local frame:
-      • origin (0, 0) at the top-left of the room's wall bounding box
-      • x axis rightward, y axis downward (SVG convention)
-    DXF is CAD-convention (Y-up), so we flip Y when translating.
-    """
-    rx0, ry0, rx1, ry1 = wall_bbox
     room_w_m = rx1 - rx0
-    room_h_m = ry1 - ry0
-    ox0, oy0, ox1, oy1 = bb
-    w_m = ox1 - ox0
-    h_m = oy1 - oy0
-    # Room-local top-left corner (Y flipped: top of room = highest DXF y)
-    x_local = ox0 - rx0
-    y_local = room_h_m - (oy1 - ry0)
-    # Clamp so openings that extend past the room edge stay inside
-    x_local = max(0.0, min(x_local, room_w_m - w_m))
-    y_local = max(0.0, min(y_local, room_h_m - h_m))
-    cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
-    label_text = _nearest_annotation(annotations, (cx, cy)) or "Opening"
-    return RoomObject(
-        type=_opening_type_from_label(label_text),
-        label=label_text,
-        x=round(x_local, 3),
-        y=round(y_local, 3),
-        width=round(w_m, 3),
-        height=round(h_m, 3),
-    )
-
-
-def _collect_openings(ms, wall_bbox: BBox) -> List[RoomObject]:
-    """Backward-compat: every opening placed in a single room (whole-floor path)."""
-    anns = _opening_annotations(ms)
-    return [_opening_to_object(bb, wall_bbox, anns) for bb in _opening_bboxes(ms)]
+    objects: List[RoomObject] = []
+    for i, (ox0, oy0, ox1, oy1) in enumerate(deduped, start=1):
+        w_m = ox1 - ox0
+        h_m = oy1 - oy0
+        # Room-local top-left corner (Y flipped: top of room = highest DXF y)
+        x_local = ox0 - rx0
+        y_local = room_h_m - (oy1 - ry0)
+        # Clamp so openings that extend past the room edge stay inside
+        x_local = max(0.0, min(x_local, room_w_m - w_m))
+        y_local = max(0.0, min(y_local, room_h_m - h_m))
+        cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
+        label_text = _nearest_annotation(annotations, (cx, cy)) or "Opening"
+        obj_type = _opening_type_from_label(label_text)
+        objects.append(RoomObject(
+            type=obj_type,
+            label=label_text,
+            x=round(x_local, 3),
+            y=round(y_local, 3),
+            width=round(w_m, 3),
+            height=round(h_m, 3),
+        ))
+    return objects
 
 
 def _dedupe_near_coincident(bboxes: List[BBox], dist_tol: float) -> List[BBox]:
@@ -596,12 +373,19 @@ def _opening_type_from_label(label: str) -> str:
     return "custom"
 
 
-def _asset_items(ms) -> List[Tuple[BBox, str]]:
+def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
     """
-    Every furniture/fixture rectangle on the `Assets` layer as (bbox, label),
-    in raw DXF coords. The label comes from the nearest TEXT on the
-    `Assets Annotation` layer; sub-5 mm degenerate strokes are dropped.
+    Walk LWPOLYLINEs on the `Assets` layer (furniture / fixtures in the
+    'complete' DXF variant) and emit one RoomObject per piece.
+
+    Same coordinate convention as openings: room-local, Y flipped to SVG
+    (origin top-left). Each rectangle's type comes from the nearest TEXT
+    on the `Assets Annotation` layer (Bed, Chair, Sink, …) — unknown
+    labels fall through to 'custom' so they still appear in the editor.
     """
+    rx0, ry0, rx1, ry1 = wall_bbox
+    room_h_m = ry1 - ry0
+
     annotations: List[Tuple[Tuple[float, float], str]] = []
     for e in ms:
         if e.dxftype() != "TEXT":
@@ -611,7 +395,7 @@ def _asset_items(ms) -> List[Tuple[BBox, str]]:
         ins = e.dxf.insert
         annotations.append(((float(ins.x), float(ins.y)), (e.dxf.text or "").strip()))
 
-    items: List[Tuple[BBox, str]] = []
+    objects: List[RoomObject] = []
     for e in ms:
         if not _layer_matches(e.dxf.layer, _ASSET_LAYERS):
             continue
@@ -620,55 +404,33 @@ def _asset_items(ms) -> List[Tuple[BBox, str]]:
         bb = _bbox_of_points(_poly_xy(e))
         if bb is None:
             continue
-        if (bb[2] - bb[0]) < 0.005 and (bb[3] - bb[1]) < 0.005:
+        ox0, oy0, ox1, oy1 = bb
+        w_m = ox1 - ox0
+        h_m = oy1 - oy0
+        if w_m < 0.005 and h_m < 0.005:
             continue
-        cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+        cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
         label = _nearest_annotation(annotations, (cx, cy)) or "Asset"
-        items.append((bb, label))
-    return items
+        key = label.strip().lower()
+        obj_type = _ASSET_TYPE_MAP.get(key) or _ASSET_TYPE_MAP.get(key.split()[0], "custom")
+        # Radar devices may have tiny DXF geometry — use default 0.08m size centered on original
+        if obj_type == "radar" and (w_m < 0.03 or h_m < 0.03):
+            w_m = 0.08
+            h_m = 0.08
+            ox0 = cx - 0.04
+            oy1 = cy + 0.04
+        elif w_m < 0.03 or h_m < 0.03:
+            continue
+        x_local = ox0 - rx0
+        y_local = room_h_m - (oy1 - ry0)
 
-
-def _asset_to_object(item: Tuple[BBox, str], wall_bbox: BBox) -> Optional[RoomObject]:
-    """
-    Convert one asset (bbox, label) to a RoomObject in the owning room's local
-    frame. Returns None for non-radar pieces smaller than 3 cm (noise). Same
-    coordinate convention as openings: room-local, Y flipped (origin top-left).
-    Type comes from `_ASSET_TYPE_MAP`; unknown labels fall through to 'custom'.
-    """
-    rx0, ry0, rx1, ry1 = wall_bbox
-    room_h_m = ry1 - ry0
-    (ox0, oy0, ox1, oy1), label = item
-    w_m = ox1 - ox0
-    h_m = oy1 - oy0
-    cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
-    key = label.strip().lower()
-    obj_type = _ASSET_TYPE_MAP.get(key) or _ASSET_TYPE_MAP.get(key.split()[0] if key else "", "custom")
-    # Radar devices may have tiny DXF geometry — use default 0.08m size centered on original
-    if obj_type == "radar" and (w_m < 0.03 or h_m < 0.03):
-        w_m = 0.08
-        h_m = 0.08
-        ox0 = cx - 0.04
-        oy1 = cy + 0.04
-    elif w_m < 0.03 or h_m < 0.03:
-        return None
-    x_local = ox0 - rx0
-    y_local = room_h_m - (oy1 - ry0)
-    return RoomObject(
-        type=obj_type,
-        label=label,
-        x=round(max(0.0, x_local), 3),
-        y=round(max(0.0, y_local), 3),
-        width=round(w_m, 3),
-        height=round(h_m, 3),
-        rotation=0,
-    )
-
-
-def _collect_assets(ms, wall_bbox: BBox) -> List[RoomObject]:
-    """Backward-compat: every asset placed in a single room (whole-floor path)."""
-    objects: List[RoomObject] = []
-    for item in _asset_items(ms):
-        obj = _asset_to_object(item, wall_bbox)
-        if obj is not None:
-            objects.append(obj)
+        objects.append(RoomObject(
+            type=obj_type,
+            label=label,
+            x=round(max(0.0, x_local), 3),
+            y=round(max(0.0, y_local), 3),
+            width=round(w_m, 3),
+            height=round(h_m, 3),
+            rotation=0,
+        ))
     return objects
