@@ -64,6 +64,9 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
   const [board, setBoard] = useState('');
   const [location, setLocation] = useState('');
   const [viewTab, setViewTab] = useState<'config' | 'zone'>('config');
+  const [draft, setDraft] = useState('');           // editable JSON text
+  const [jsonErr, setJsonErr] = useState<string | null>(null);
+  const taFocused = useRef(false);
   const dragRef = useRef<Drag | null>(null);
 
   useEffect(() => {
@@ -106,6 +109,51 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
   }, [serialized, board, location]);
 
   const liveZone = useMemo(() => ({ zone: zone.map(([x, y]) => [r3(x), r3(y)]) }), [zone]);
+
+  // Plot → code: keep the editable JSON in sync with the live model, except while
+  // the user is actively typing in it (so their edits aren't clobbered mid-keystroke).
+  useEffect(() => {
+    if (taFocused.current) return;
+    setDraft(JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2));
+    setJsonErr(null);
+  }, [liveConfig, liveZone, viewTab]);
+
+  // code → Plot: parse the edited JSON and write it back into the model. Objects
+  // are matched by name (bed / door1 / sofa1 …); unknown/malformed entries are skipped.
+  function applyDraft(text: string) {
+    setDraft(text);
+    let parsed: any;
+    try { parsed = JSON.parse(text); } catch { setJsonErr('Invalid JSON'); return; }
+    try {
+      if (viewTab === 'zone') {
+        if (!Array.isArray(parsed?.zone)) throw new Error('Expected { "zone": [[x,y], …] }');
+        const z = parsed.zone.map((p: any) => [+p?.[0], +p?.[1]] as [number, number]);
+        if (z.some((p: [number, number]) => !isFinite(p[0]) || !isFinite(p[1]))) throw new Error('zone has non-numbers');
+        if (z.length < 3) throw new Error('zone needs ≥3 points');
+        setZone(z);
+      } else {
+        const arr = parsed?.objects;
+        if (!Array.isArray(arr)) throw new Error('Expected { "objects": [ … ] }');
+        setPobjs(list => list.map(p => {
+          const c = arr.find((o: any) => o?.name === p.name);
+          if (!c || !c.top_left || !c.top_right || !c.bottom_left) return p;
+          const x0 = +c.top_left[0], yTop = +c.top_left[1], x1 = +c.top_right[0], yBot = +c.bottom_left[1];
+          if ([x0, x1, yTop, yBot].some(v => !isFinite(v))) return p;
+          const num = (v: any, d: number) => (isFinite(+v) ? Math.max(0, +v) : d);
+          return {
+            ...p,
+            minX: Math.min(x0, x1), maxX: Math.max(x0, x1),
+            minY: Math.min(yTop, yBot), maxY: Math.max(yTop, yBot),
+            mTop: num(c.margin_top, p.mTop), mBottom: num(c.margin_bottom, p.mBottom),
+            mLeft: num(c.margin_left, p.mLeft), mRight: num(c.margin_right, p.mRight),
+          };
+        }));
+      }
+      setJsonErr(null);
+    } catch (e: any) {
+      setJsonErr(e?.message || 'Invalid structure');
+    }
+  }
 
   const PAD = 52;
   const scale = Math.min((size.w - 2 * PAD) / (bounds.w || 1), (size.h - 2 * PAD) / (bounds.h || 1));
@@ -311,9 +359,17 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
                     border: `1px solid ${viewTab === tab ? 'transparent' : grid}` }}>{tab}</button>
               ))}
             </div>
-            <pre style={{ margin: 0, flex: 1, overflow: 'auto', background: dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.04)', border: `1px solid ${grid}`, borderRadius: 8, padding: 10, fontSize: 10, lineHeight: 1.5, color: dark ? '#a5b4fc' : '#334155', fontFamily: 'monospace', whiteSpace: 'pre' }}>
-              {JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2)}
-            </pre>
+            <textarea
+              value={draft}
+              spellCheck={false}
+              onFocus={() => { taFocused.current = true; }}
+              onBlur={() => { taFocused.current = false; setDraft(JSON.stringify(viewTab === 'config' ? liveConfig : liveZone, null, 2)); setJsonErr(null); }}
+              onChange={e => applyDraft(e.target.value)}
+              style={{ margin: 0, flex: 1, minHeight: 160, resize: 'none', overflow: 'auto', background: dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.04)', border: `1px solid ${jsonErr ? 'rgba(239,68,68,0.6)' : grid}`, borderRadius: 8, padding: 10, fontSize: 10, lineHeight: 1.5, color: dark ? '#a5b4fc' : '#334155', fontFamily: 'monospace', whiteSpace: 'pre', outline: 'none', tabSize: 2 }}
+            />
+            {jsonErr
+              ? <p style={{ margin: '4px 0 0', fontSize: 10, color: '#f87171' }}>⚠ {jsonErr} — fix to apply</p>
+              : <p style={{ margin: '4px 0 0', fontSize: 9, color: txt }}>Editable — type to update the plot (objects matched by name).</p>}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
