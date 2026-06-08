@@ -171,6 +171,60 @@ export function prettyJson(value: unknown, indent = 2, level = 0): string {
   return JSON.stringify(value);
 }
 
+/**
+ * KuboCare gateway publish payload (POST /api/v1/room-config). Keyed by
+ * (board_id, location); carries the room in ROOM space (metres, X=right,
+ * Y-down) plus an explicit `radar_alignment` (the radar's room-space centre +
+ * facing) so the visualiser renders geometry in the radar frame without
+ * guessing. Furniture only (radar/person excluded — the radar is a device row
+ * on the gateway side). Matches relay/contracts/room-config.schema.json.
+ */
+export function buildPublishPayload(
+  objects: RoomObject[],
+  room: RoomConfig,
+  board: string,
+  location: string,
+) {
+  const radar = objects.find(o => o.type === 'radar');
+  let radar_alignment: Record<string, unknown> | undefined;
+  if (radar) {
+    const { nx, ny } = getRadarFacing(radar, room);
+    radar_alignment = {
+      radar_room_x: +(radar.x + radar.width / 2).toFixed(3),
+      radar_room_y: +(radar.y + radar.height / 2).toFixed(3),
+      facing: [+nx.toFixed(6), +ny.toFixed(6)],
+      floor_z: 0,
+    };
+  }
+
+  const furniture = objects
+    .filter(o => o.type !== 'radar' && o.type !== 'person')
+    .map(o => ({
+      type: o.type,
+      label: o.label,
+      x: +o.x.toFixed(3),
+      y: +o.y.toFixed(3),
+      width: +o.width.toFixed(3),
+      height: +o.height.toFixed(3),
+      rotation: o.rotation,
+    }));
+
+  return {
+    board_id: board,
+    location,
+    format_version: '1.0',
+    room: {
+      width: +room.width.toFixed(3),
+      height: +room.height.toFixed(3),
+      ...(room.polygon && room.polygon.length >= 3
+        ? { polygon: room.polygon.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)]) }
+        : {}),
+    },
+    objects: furniture,
+    radar_alignment,
+  };
+}
+
 /** Room boundary polygon in the radar-local frame (radar at 0,0). Full precision. */
 export function buildZone(objects: RoomObject[], room: RoomConfig): { zone: number[][] } {
   const { toLocal } = radarFrame(objects, room);

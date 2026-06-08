@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ObjectType, RoomConfig, RoomObject, AdjacentRoom, WallSide, AdjacentRoomType } from './types';
 import { OBJECT_PRESETS } from './types';
-import { buildConfig, buildZone, prettyJson, CONFIG_TYPES } from './exportConfig';
+import { buildConfig, buildZone, buildPublishPayload, prettyJson, CONFIG_TYPES } from './exportConfig';
 import { RoomEditor } from './components/RoomEditor';
 import { ObjectPalette } from './components/ObjectPalette';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
+import { PublishModal } from './components/PublishModal';
 import { PlotEditor } from './components/PlotEditor';
 import { ImportImageModal } from './components/ImportImageModal';
 import { RoomSplitModal } from './components/RoomSplitModal';
@@ -47,6 +48,7 @@ export default function App() {
   const [activeIdx,  setActiveIdx]  = useState(0);
   const [viewer,     setViewer]     = useState<null | { simulate: boolean }>(null);
   const [showExport, setShowExport] = useState(false);
+  const [showPublish, setShowPublish] = useState(false);
   const [showPlot,   setShowPlot]   = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showSplit,  setShowSplit]  = useState(false);
@@ -364,6 +366,11 @@ export default function App() {
           <button onClick={() => setShowExport(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(99,102,241,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
           >↓ Export</button>
+
+          <button onClick={() => setShowPublish(true)} disabled={objects.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#10b981,#059669)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(16,185,129,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
+            title="Publish this room layout to KuboCare"
+          >🚀 Publish</button>
         </div>
       </header>
 
@@ -518,6 +525,16 @@ export default function App() {
 
       {showSplit && (
         <RoomSplitModal dark={dark} room={room} objects={objects} onSplit={handleSplitRoom} onCancel={() => setShowSplit(false)} />
+      )}
+
+      {showPublish && (
+        <PublishModal
+          dark={dark}
+          onClose={() => setShowPublish(false)}
+          defaultLocation={room.name}
+          hasRadar={!!radarObj}
+          buildPayload={(board, location) => buildPublishPayload(objects, room, board, location)}
+        />
       )}
 
       {showExport && (
