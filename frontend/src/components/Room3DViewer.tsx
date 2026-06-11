@@ -788,15 +788,7 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
       // ── All other furniture ───────────────────────────────────────────────
       let group: THREE.Group;
       switch (obj.type) {
-        case 'bed': {
-          // Headboard against the nearest wall, so the bed reads correctly in
-          // any layout (DXF imports carry no rotation).
-          const bx = obj.x + w/2, bz = obj.y + d/2;
-          const nw = nearestWall(bx, bz);
-          const dx = nw.x - bx, dz = nw.z - bz;
-          const facing = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 90 : 270) : (dz > 0 ? 180 : 0);
-          group = makeBed(w, d, facing); break;
-        }
+        case 'bed':      group = makeBed(w, d, obj.rotation); break;
         case 'sofa':     group = makeSofa(w, d, color); break;
         case 'wardrobe': group = makeWardrobe(w, d); break;
         case 'table':    group = makeTable(w, d); break;
