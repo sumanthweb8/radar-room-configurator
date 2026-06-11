@@ -534,7 +534,14 @@ export default function App() {
         <PlotEditor
           dark={dark} room={room} objects={objects}
           initialZone={tab.zone} initialBoard={tab.plotBoard} initialLocation={tab.plotLocation}
-          onPersist={s => patchTab({ zone: s.zone, plotBoard: s.board, plotLocation: s.location })}
+          onPersist={s => patchTab({
+            zone: s.zone, plotBoard: s.board, plotLocation: s.location,
+            // Plot margin-handle drags write back to the object's margins so they persist.
+            objects: objects.map(o => {
+              const m = s.margins.find(mm => mm.id === o.id);
+              return m ? { ...o, marginTop: m.top, marginBottom: m.bottom, marginLeft: m.left, marginRight: m.right } : o;
+            }),
+          })}
           onClose={() => setShowPlot(false)} />
       )}
 

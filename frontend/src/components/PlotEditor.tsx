@@ -11,8 +11,13 @@ interface Props {
   initialZone?: [number, number][];
   initialBoard?: string;
   initialLocation?: string;
-  /** Reports zone + publish inputs back to the parent so they persist. */
-  onPersist?: (s: { zone: [number, number][]; board: string; location: string }) => void;
+  /** Reports zone + publish inputs + per-object margins back to the parent so they persist. */
+  onPersist?: (s: {
+    zone: [number, number][];
+    board: string;
+    location: string;
+    margins: { id: string; top: number; bottom: number; left: number; right: number }[];
+  }) => void;
 }
 
 // A single object in radar-local space: an axis-aligned box + four margins.
@@ -249,9 +254,10 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose, init
   const persistRef = useRef(onPersist);
   persistRef.current = onPersist;
   useEffect(() => {
-    const t = setTimeout(() => persistRef.current?.({ zone, board, location }), 300);
+    const margins = pobjs.map(p => ({ id: p.id, top: p.mTop, bottom: p.mBottom, left: p.mLeft, right: p.mRight }));
+    const t = setTimeout(() => persistRef.current?.({ zone, board, location, margins }), 300);
     return () => clearTimeout(t);
-  }, [zone, board, location]);
+  }, [zone, board, location, pobjs]);
 
   // Axis ticks
   const stepFor = (range: number) => range > 6 ? 1 : range > 3 ? 0.5 : 0.25;
