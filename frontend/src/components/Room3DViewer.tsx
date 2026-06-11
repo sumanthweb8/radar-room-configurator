@@ -525,13 +525,19 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
 
     if (room.polygon && room.polygon.length >= 3) {
       // ── Polygon floor (L-shape etc.) ──
+      // room.polygon is room-local Y-down (origin top-left) — the same frame the
+      // wall edges and furniture use as world +Z. A ShapeGeometry rotated
+      // rotation.x = -π/2 maps shape (x, y) → world (x, 0, -y), so negate Y here
+      // to land the floor/ceiling at world +Z, exactly on top of the walls.
       const shape = new THREE.Shape();
-      shape.moveTo(room.polygon[0][0], room.polygon[0][1]);
-      for (let i = 1; i < room.polygon.length; i++) shape.lineTo(room.polygon[i][0], room.polygon[i][1]);
+      shape.moveTo(room.polygon[0][0], -room.polygon[0][1]);
+      for (let i = 1; i < room.polygon.length; i++) shape.lineTo(room.polygon[i][0], -room.polygon[i][1]);
       shape.closePath();
 
       const floorGeo = new THREE.ShapeGeometry(shape);
-      const floorMesh = mesh(floorGeo, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55 }));
+      // DoubleSide: negating the shape Y reverses triangle winding, so the top
+      // face would otherwise be back-culled when viewed from above.
+      const floorMesh = mesh(floorGeo, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55, side: THREE.DoubleSide }));
       floorMesh.rotation.x = -Math.PI / 2;
       floorMesh.position.y = 0;
       scene.add(floorMesh);
