@@ -788,7 +788,15 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
       // ── All other furniture ───────────────────────────────────────────────
       let group: THREE.Group;
       switch (obj.type) {
-        case 'bed':      group = makeBed(w, d, obj.rotation); break;
+        case 'bed': {
+          // Headboard against the nearest wall, so the bed reads correctly in
+          // any layout (DXF imports carry no rotation).
+          const bx = obj.x + w/2, bz = obj.y + d/2;
+          const nw = nearestWall(bx, bz);
+          const dx = nw.x - bx, dz = nw.z - bz;
+          const facing = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 90 : 270) : (dz > 0 ? 180 : 0);
+          group = makeBed(w, d, facing); break;
+        }
         case 'sofa':     group = makeSofa(w, d, color); break;
         case 'wardrobe': group = makeWardrobe(w, d); break;
         case 'table':    group = makeTable(w, d); break;
@@ -800,8 +808,22 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, simulate
       }
       const wrapper = new THREE.Group();
       wrapper.position.set(obj.x + w/2, 0, obj.y + d/2);
-      // Beds handle facing internally — skip outer rotation
-      if (obj.type !== 'bed') wrapper.rotation.y = -(obj.rotation * Math.PI) / 180;
+      // Beds handle facing internally — skip outer rotation.
+      if (obj.type === 'chair') {
+        // Nobody sits facing away from the table — aim the seat (local +z) at
+        // the nearest table/desk; DXF imports carry no rotation to rely on.
+        const cx2 = obj.x + w/2, cz2 = obj.y + d/2;
+        let best: { dx: number; dz: number } | null = null, bestD = Infinity;
+        for (const o of objects) {
+          if (o === obj || (o.type !== 'table' && o.type !== 'desk')) continue;
+          const tx = o.x + o.width/2, tz = o.y + o.height/2;
+          const dd = (tx - cx2) ** 2 + (tz - cz2) ** 2;
+          if (dd < bestD) { bestD = dd; best = { dx: tx - cx2, dz: tz - cz2 }; }
+        }
+        wrapper.rotation.y = best ? Math.atan2(best.dx, best.dz) : -(obj.rotation * Math.PI) / 180;
+      } else if (obj.type !== 'bed') {
+        wrapper.rotation.y = -(obj.rotation * Math.PI) / 180;
+      }
       group.position.set(0, 0, -d/2);
       wrapper.add(group);
       wrapper.traverse(c => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; c.receiveShadow = true; } });
