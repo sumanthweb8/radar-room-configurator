@@ -9,6 +9,7 @@ import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
 import { PublishModal } from './components/PublishModal';
 import { PlotEditor } from './components/PlotEditor';
+import { loadSession, saveSession } from './persistence';
 import { ImportImageModal } from './components/ImportImageModal';
 import { RoomSplitModal } from './components/RoomSplitModal';
 import { boundaryOf, pointInPolygonPlan } from './sim/coverage';
@@ -19,7 +20,7 @@ function genId(): string { return Math.random().toString(36).slice(2, 10); }
 
 // ── Per-tab state ─────────────────────────────────────────────────────────────
 
-interface TabState {
+export interface TabState {
   id: string;
   label: string;
   area: string;
@@ -27,6 +28,10 @@ interface TabState {
   objects: RoomObject[];
   selectedId: string | null;
   adjacentRooms: AdjacentRoom[];
+  // Plot-editor state (persisted): the edited coverage zone + publish inputs.
+  zone?: [number, number][];
+  plotBoard?: string;
+  plotLocation?: string;
 }
 
 function initTabs(): TabState[] {
@@ -44,8 +49,11 @@ function initTabs(): TabState[] {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [tabs,       setTabs]       = useState<TabState[]>(initTabs);
-  const [activeIdx,  setActiveIdx]  = useState(0);
+  // Restore the previous editing session from localStorage (rooms + objects +
+  // plot zone), so a refresh / reopen shows the latest edits. Falls back to a
+  // fresh default room when nothing is saved or the stored data is corrupt.
+  const [tabs,       setTabs]       = useState<TabState[]>(() => loadSession()?.tabs ?? initTabs());
+  const [activeIdx,  setActiveIdx]  = useState<number>(() => loadSession()?.activeIdx ?? 0);
   const [viewer,     setViewer]     = useState<null | { simulate: boolean }>(null);
   const [showExport, setShowExport] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
@@ -77,6 +85,9 @@ export default function App() {
   function patchTab(patch: Partial<TabState>) {
     setTabs(prev => prev.map((t, i) => i === activeIdx ? { ...t, ...patch } : t));
   }
+
+  // Persist the whole editing session (debounced) whenever it changes.
+  useEffect(() => { saveSession(tabs, activeIdx); }, [tabs, activeIdx]);
 
   const tab = tabs[activeIdx];
   const { room, objects, selectedId, adjacentRooms } = tab;
@@ -335,7 +346,7 @@ export default function App() {
           </button>
 
           {objects.length > 0 && (
-            <button onClick={() => { if (window.confirm(`Clear all objects in ${tab.label}?`)) patchTab({ objects: [], selectedId: null }); }}
+            <button onClick={() => { if (window.confirm(`Clear all objects in ${tab.label}?`)) patchTab({ objects: [], selectedId: null, zone: undefined }); }}
               style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 500, color: textMuted, cursor: 'pointer', background: 'transparent', border: `1px solid ${border}`, transition: 'all 0.15s' }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#f87171'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(248,113,113,0.4)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = textMuted; (e.currentTarget as HTMLButtonElement).style.borderColor = border; }}
@@ -520,7 +531,11 @@ export default function App() {
       )}
 
       {showPlot && (
-        <PlotEditor dark={dark} room={room} objects={objects} onClose={() => setShowPlot(false)} />
+        <PlotEditor
+          dark={dark} room={room} objects={objects}
+          initialZone={tab.zone} initialBoard={tab.plotBoard} initialLocation={tab.plotLocation}
+          onPersist={s => patchTab({ zone: s.zone, plotBoard: s.board, plotLocation: s.location })}
+          onClose={() => setShowPlot(false)} />
       )}
 
       {showSplit && (

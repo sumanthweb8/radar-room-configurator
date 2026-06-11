@@ -7,6 +7,12 @@ interface Props {
   objects: RoomObject[];
   dark: boolean;
   onClose: () => void;
+  /** Saved zone/inputs to restore (from the parent tab); absent → rebuild from room. */
+  initialZone?: [number, number][];
+  initialBoard?: string;
+  initialLocation?: string;
+  /** Reports zone + publish inputs back to the parent so they persist. */
+  onPersist?: (s: { zone: [number, number][]; board: string; location: string }) => void;
 }
 
 // A single object in radar-local space: an axis-aligned box + four margins.
@@ -52,17 +58,18 @@ type Drag =
   | { kind: 'corner'; id: string; cx: 'min' | 'max'; cy: 'min' | 'max' }
   | { kind: 'margin'; id: string; side: 'top' | 'bottom' | 'left' | 'right' };
 
-export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) => {
+export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose, initialZone, initialBoard, initialLocation, onPersist }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 900, h: 640 });
 
-  const [zone, setZone] = useState<[number, number][]>(() => buildZone(objects, room).zone as [number, number][]);
+  const [zone, setZone] = useState<[number, number][]>(() =>
+    initialZone && initialZone.length >= 3 ? initialZone : (buildZone(objects, room).zone as [number, number][]));
   const [pobjs, setPobjs] = useState<PlotObj[]>(() => initObjs(objects, room));
   const [shown, setShown] = useState<Set<string>>(() => new Set(initObjs(objects, room).map(p => p.id)));
   const [sel, setSel] = useState<{ kind: 'vertex'; i: number } | { kind: 'obj'; id: string } | null>(null);
-  const [board, setBoard] = useState('');
-  const [location, setLocation] = useState('');
+  const [board, setBoard] = useState(initialBoard ?? '');
+  const [location, setLocation] = useState(initialLocation ?? '');
   const [viewTab, setViewTab] = useState<'config' | 'zone'>('config');
   const [draft, setDraft] = useState('');           // editable JSON text
   const [jsonErr, setJsonErr] = useState<string | null>(null);
@@ -212,7 +219,7 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
     window.addEventListener('pointerup', onUp);
   }
 
-  // Insert a vertex at the midpoint of a zone edge (double-click).
+  // Insert a vertex at the midpoint of a zone edge (double-click an edge).
   function addVertexOnEdge(i: number) {
     setZone(z => {
       const a = z[i], b = z[(i + 1) % z.length];
@@ -221,15 +228,30 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
     });
   }
 
+  // Remove a zone vertex (double-click a vertex, or Delete/Backspace while one is
+  // selected). Guarded so the zone never drops below a valid 3-vertex polygon.
+  function deleteVertex(i: number) {
+    setZone(z => (z.length > 3 ? z.filter((_, j) => j !== i) : z));
+    setSel(null);
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && sel?.kind === 'vertex' && zone.length > 3) {
-        setZone(z => z.filter((_, i) => i !== sel.i)); setSel(null);
-      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && sel?.kind === 'vertex') deleteVertex(sel.i);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sel, zone.length]);
+  }, [sel]);
+
+  // Report zone + publish inputs to the parent (debounced) so they persist across
+  // reopening the panel and page refreshes. A ref holds the latest callback so the
+  // timer isn't re-armed on every parent re-render.
+  const persistRef = useRef(onPersist);
+  persistRef.current = onPersist;
+  useEffect(() => {
+    const t = setTimeout(() => persistRef.current?.({ zone, board, location }), 300);
+    return () => clearTimeout(t);
+  }, [zone, board, location]);
 
   // Axis ticks
   const stepFor = (range: number) => range > 6 ? 1 : range > 3 ? 0.5 : 0.25;
@@ -255,11 +277,12 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
     setTimeout(() => downloadJson(liveZone, `${base}_zone.json`), 150);
   }
 
-  const handle = (mx: number, my: number, key: string, fill: string, d: Drag, shape: 'rect' | 'circle' = 'rect') => {
+  const handle = (mx: number, my: number, key: string, fill: string, d: Drag, shape: 'rect' | 'circle' = 'rect', onDbl?: () => void) => {
     const [px, py] = toPx(mx, my);
+    const dbl = onDbl ? (e: React.MouseEvent) => { e.stopPropagation(); onDbl(); } : undefined;
     return shape === 'circle'
-      ? <circle key={key} cx={px} cy={py} r={5} fill={fill} stroke="#fff" strokeWidth={1.2} style={{ cursor: 'grab' }} onPointerDown={e => startDrag(d, e)} />
-      : <rect key={key} x={px - 4} y={py - 4} width={8} height={8} fill={fill} stroke="#fff" strokeWidth={1.2} style={{ cursor: 'grab' }} onPointerDown={e => startDrag(d, e)} />;
+      ? <circle key={key} cx={px} cy={py} r={5} fill={fill} stroke="#fff" strokeWidth={1.2} style={{ cursor: 'grab' }} onPointerDown={e => startDrag(d, e)} onDoubleClick={dbl} />
+      : <rect key={key} x={px - 4} y={py - 4} width={8} height={8} fill={fill} stroke="#fff" strokeWidth={1.2} style={{ cursor: 'grab' }} onPointerDown={e => startDrag(d, e)} onDoubleClick={dbl} />;
   };
 
   return (
@@ -318,8 +341,8 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
               );
             })}
 
-            {/* zone vertices */}
-            {zone.map((p, i) => handle(p[0], p[1], `v${i}`, sel?.kind === 'vertex' && sel.i === i ? '#f59e0b' : '#0f172a', { kind: 'vertex', i }, 'circle'))}
+            {/* zone vertices (double-click to delete) */}
+            {zone.map((p, i) => handle(p[0], p[1], `v${i}`, sel?.kind === 'vertex' && sel.i === i ? '#f59e0b' : '#0f172a', { kind: 'vertex', i }, 'circle', () => deleteVertex(i)))}
 
             {/* radar at origin */}
             {(() => { const [px, py] = toPx(0, 0); return <g key="radar"><circle cx={px} cy={py} r={7} fill="#ef4444" /><text x={px + 11} y={py + 4} fill="#ef4444" fontSize={11} fontWeight={700}>Radar (0,0)</text></g>; })()}
@@ -332,7 +355,11 @@ export const PlotEditor: React.FC<Props> = ({ room, objects, dark, onClose }) =>
             <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>▣ Plot</p>
             <button onClick={onClose} style={{ padding: '4px 10px', borderRadius: 7, fontSize: 12, color: txt, background: 'transparent', border: `1px solid ${grid}`, cursor: 'pointer' }}>✕ Close</button>
           </div>
-          <p style={{ margin: 0, fontSize: 10, color: txt, lineHeight: 1.6 }}>Drag objects, corners (resize) and the dashed margin handles; drag zone vertices (double-click an edge to add one). The config + zone below update live.</p>
+          <p style={{ margin: 0, fontSize: 10, color: txt, lineHeight: 1.6 }}>Drag objects, corners (resize) and the dashed margin handles. Drag zone vertices — <b>double-click an edge to add a point, double-click a point to delete</b> (or select a point + Delete). The config + zone below update live.</p>
+          <button onClick={() => setZone(buildZone(objects, room).zone as [number, number][])}
+            style={{ alignSelf: 'flex-start', padding: '4px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, color: txt, background: 'transparent', border: `1px solid ${grid}`, cursor: 'pointer' }}>
+            ↺ Reset zone to room
+          </button>
 
           <div>
             <p style={{ margin: '0 0 6px', fontSize: 11, fontWeight: 700, color: dark ? '#e2e8f0' : '#0f172a' }}>Objects</p>
