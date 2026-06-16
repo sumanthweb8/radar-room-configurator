@@ -7,6 +7,7 @@ import { PropertiesPanel } from './components/PropertiesPanel';
 import { Room3DViewer } from './components/Room3DViewer';
 import { ExportModal } from './components/ExportModal';
 import { ImportImageModal } from './components/ImportImageModal';
+import { MovementViewer } from './components/MovementViewer';
 import { FLOOR_PLAN_ROOMS } from './floorPlanData';
 
 function genId(): string { return Math.random().toString(36).slice(2, 10); }
@@ -103,7 +104,7 @@ function buildKcroom(room: RoomConfig, objects: RoomObject[]) {
   // Coverage targets: key points on beds and doors that radars must see
   const coverageTargets: { type: string; label: string; points: number[][] }[] = [];
   for (const obj of objects) {
-    if (obj.type !== 'bed' && obj.type !== 'door') continue;
+    if (obj.type !== 'bed' && obj.type !== 'door' && obj.type !== 'sofa') continue;
     const pts: number[][] = [
       [obj.x + obj.width / 2, obj.y + obj.height / 2],
       [obj.x, obj.y], [obj.x + obj.width, obj.y],
@@ -139,8 +140,10 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
   const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
   const right_x = -fwd_y, right_y = fwd_x;
 
-  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+  const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door' || o.type === 'sofa');
+  const sofaCount = exportable.filter(o => o.type === 'sofa').length;
   let doorIdx = 0;
+  let sofaIdx = 0;
   const serialized = exportable.map(obj => {
     // Transform all 4 room corners into radar-local coords, then take bounding box
     const corners = [
@@ -157,7 +160,10 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
 
-    const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+    let name: string;
+    if (obj.type === 'door')      name = `door${++doorIdx}`;
+    else if (obj.type === 'sofa') name = sofaCount > 1 ? `sofabed${++sofaIdx}` : 'sofabed';
+    else                          name = 'bed';
     const entry: Record<string, unknown> = {
       name,
       top_left:     [minX, maxY],
@@ -169,7 +175,7 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
       margin_left:   obj.marginLeft   ?? 0.3,
       margin_right:  obj.marginRight  ?? 0.3,
     };
-    if (obj.type === 'bed') {
+    if (obj.type === 'bed' || obj.type === 'sofa') {
       entry.top_height    = 0.5;
       entry.bottom_height = 0.5;
       entry.right_width   = 0.5;
@@ -178,73 +184,13 @@ function buildConfig(objects: RoomObject[], board: string, location: string, roo
     return entry;
   });
 
-  // Clamp margins so detection zones never overlap between objects
-  const MARGIN_THRESH = 0.3 * 2;
-  const clampedPairs: string[] = [];
-  const objBounds = serialized.map(o => {
-    const tl = o.top_left as number[], tr = o.top_right as number[], bl = o.bottom_left as number[];
-    return { minX: tl[0], maxX: tr[0], minY: bl[1], maxY: tl[1] };
-  });
-  for (let i = 0; i < serialized.length; i++) {
-    const a = serialized[i];
-    const ai = objBounds[i];
-    for (let j = i + 1; j < serialized.length; j++) {
-      const b = serialized[j];
-      const bj = objBounds[j];
-      const yNear = (ai.minY - MARGIN_THRESH) < bj.maxY && (bj.minY - MARGIN_THRESH) < ai.maxY;
-      const xNear = (ai.minX - MARGIN_THRESH) < bj.maxX && (bj.minX - MARGIN_THRESH) < ai.maxX;
-
-      // Horizontal: A right ↔ B left
-      if (bj.minX >= ai.maxX && yNear) {
-        const gap = bj.minX - ai.maxX;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((a.margin_right as number) + (b.margin_left as number) > gap) {
-          a.margin_right = Math.min(a.margin_right as number, half);
-          b.margin_left  = Math.min(b.margin_left  as number, half);
-          clampedPairs.push(`${a.name} ↔ ${b.name} (horizontal gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Horizontal: B right ↔ A left
-      if (ai.minX >= bj.maxX && yNear) {
-        const gap = ai.minX - bj.maxX;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((b.margin_right as number) + (a.margin_left as number) > gap) {
-          b.margin_right = Math.min(b.margin_right as number, half);
-          a.margin_left  = Math.min(a.margin_left  as number, half);
-          clampedPairs.push(`${b.name} ↔ ${a.name} (horizontal gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Vertical: A top ↔ B bottom
-      if (bj.minY >= ai.maxY && xNear) {
-        const gap = bj.minY - ai.maxY;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((a.margin_top as number) + (b.margin_bottom as number) > gap) {
-          a.margin_top    = Math.min(a.margin_top    as number, half);
-          b.margin_bottom = Math.min(b.margin_bottom as number, half);
-          clampedPairs.push(`${a.name} ↔ ${b.name} (vertical gap ${gap.toFixed(2)}m)`);
-        }
-      }
-      // Vertical: B top ↔ A bottom
-      if (ai.minY >= bj.maxY && xNear) {
-        const gap = ai.minY - bj.maxY;
-        const half = Math.max(0, +(gap / 2).toFixed(3));
-        if ((b.margin_top as number) + (a.margin_bottom as number) > gap) {
-          b.margin_top    = Math.min(b.margin_top    as number, half);
-          a.margin_bottom = Math.min(a.margin_bottom as number, half);
-          clampedPairs.push(`${b.name} ↔ ${a.name} (vertical gap ${gap.toFixed(2)}m)`);
-        }
-      }
-    }
-  }
-
   const names     = serialized.map(o => o.name as string);
-  const bedNames  = names.filter(n => n === 'bed');
+  const bedNames  = names.filter(n => n === 'bed' || n.startsWith('sofabed'));
   const doorNames = names.filter(n => n.startsWith('door'));
 
   return {
     device_configs: { board, location },
     objects: serialized,
-    _clampedMargins: clampedPairs,
     state_machine:               { objects: names },
     out_of_room_alerts:          { objects: doorNames },
     out_of_bed_alerts:           { objects: bedNames },
@@ -280,6 +226,36 @@ function initTabs(): TabState[] {
   }));
 }
 
+// ── KuboCare cross-window message bridge ─────────────────────────────────────
+// Registered at module load (before React mounts) so StrictMode's setup→cleanup→setup
+// cycle can't drop a `kubocare-load-config` reply that lands between cleanups.
+const kubocareBus = (() => {
+  let buffered: any = null;
+  const subscribers = new Set<(cfg: any) => void>();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('message', (ev: MessageEvent) => {
+      if (!ev.data || typeof ev.data !== 'object') return;
+      if (ev.data.type !== 'kubocare-load-config' || !ev.data.config) return;
+      if (subscribers.size === 0) {
+        buffered = ev.data.config;
+        console.info('[kubocare][bus] config arrived from ' + ev.origin + ' — buffered (no subscribers yet)');
+      } else {
+        console.info('[kubocare][bus] config arrived from ' + ev.origin + ' — delivering to ' + subscribers.size + ' subscriber(s)');
+        subscribers.forEach(fn => { try { fn(ev.data.config); } catch (err) { console.error('[kubocare][bus] subscriber threw', err); } });
+      }
+    });
+    console.info('[kubocare][bus] module-scope listener registered');
+  }
+  return {
+    subscribe(fn: (cfg: any) => void) {
+      subscribers.add(fn);
+      console.info('[kubocare][bus] subscribe: now ' + subscribers.size + ' subscriber(s); buffered=' + (buffered !== null));
+      if (buffered) { const b = buffered; buffered = null; try { fn(b); } catch (err) { console.error('[kubocare][bus] flush threw', err); } }
+      return () => { subscribers.delete(fn); console.info('[kubocare][bus] unsubscribe: now ' + subscribers.size); };
+    },
+  };
+})();
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -288,13 +264,159 @@ export default function App() {
   const [show3D,     setShow3D]     = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showMovement, setShowMovement] = useState(false);
   const [dark,       setDark]       = useState(true);
-  const [marginAlert, setMarginAlert] = useState<string[] | null>(null);
 
-  // ── Listen for radar placements from mSIM ──────────────────────────────────
+  // ── Auto-import from KuboCare via URL param + localStorage ──────────────────
+  const [embedMode, setEmbedMode] = useState<'3d-embed' | null>(null);
+  const [embedConfig, setEmbedConfig] = useState<{ room: RoomConfig; objects: RoomObject[] } | null>(null);
+  const [kubocareEditMode, setKubocareEditMode] = useState(false);
+
+  const [kubocareStatus, setKubocareStatus] = useState<'idle' | 'waiting' | 'loaded' | 'no-opener'>('idle');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const kcMode = params.get('kubocare');
+    if (!kcMode) return;
+    console.info('[kubocare] mode =', kcMode, 'opener =', !!window.opener);
+
+    const applyConfig = (cfg: any) => {
+      try {
+        const r = cfg.room;
+        const objs: RoomObject[] = (cfg.objects || []).map((o: any) => {
+          const preset = OBJECT_PRESETS[o.type as keyof typeof OBJECT_PRESETS] || OBJECT_PRESETS['custom'];
+          return {
+            id: genId(), type: o.type, label: o.label || o.type,
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            color: preset.color, rotation: o.rotation ?? 0,
+            marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+          };
+        });
+
+        if (kcMode === '3d-embed') {
+          setEmbedMode('3d-embed');
+          setEmbedConfig({ room: { name: r.name, width: r.width, height: r.height }, objects: objs });
+          return;
+        }
+
+        const newTab: TabState = {
+          id: genId(), label: r.name || 'KuboCare Import',
+          area: `${(r.width * r.height).toFixed(1)} m²`,
+          room: { name: r.name, width: r.width, height: r.height },
+          objects: objs, selectedId: null, adjacentRooms: [],
+        };
+        setTabs([newTab]);
+        setActiveIdx(0);
+        if (kcMode === '3d') setShow3D(true);
+        if (kcMode === '2d') setKubocareEditMode(true);
+        setKubocareStatus('loaded');
+        // Now that the config has been applied, scrub the URL so we don't
+        // re-trigger this flow on reload. Doing it AFTER apply means StrictMode's
+        // setup→cleanup→setup cycle can still see `?kubocare=2d` on the 2nd setup
+        // and re-subscribe to the bus, flushing any buffered config.
+        try { window.history.replaceState({}, '', window.location.pathname); } catch {}
+        console.info('[kubocare] config loaded:', { room: r, objectCount: objs.length });
+      } catch (e) { console.error('[kubocare] apply failed', e); }
+    };
+
+    let applied = false;
+    const tryApply = (cfg: any) => { if (applied) return; applied = true; applyConfig(cfg); };
+
+    // 1) Same-origin path: localStorage handoff
+    try {
+      const raw = localStorage.getItem('kubocare_room_config');
+      if (raw) {
+        console.info('[kubocare] found config in localStorage (same-origin path)');
+        tryApply(JSON.parse(raw));
+        localStorage.removeItem('kubocare_room_config');
+      }
+    } catch {}
+
+    // 2) Cross-origin path: ask opener for the config; retry a few times
+    //    so a slow KuboCare listener doesn't strand the editor without a config.
+    //    The actual `message` listener lives at module scope (kubocareBus) so it
+    //    survives React StrictMode's setup→cleanup→setup cycle.
+    const unsubscribe = kubocareBus.subscribe((cfg) => {
+      console.info('[kubocare] received config via bus');
+      tryApply(cfg);
+    });
+
+    let pingCount = 0;
+    const pingOpener = () => {
+      if (applied) return;
+      if (!window.opener || window.opener.closed) {
+        console.warn('[kubocare] no window.opener available; cannot request config');
+        setKubocareStatus('no-opener');
+        return;
+      }
+      pingCount++;
+      console.info('[kubocare] ping opener (attempt ' + pingCount + ')');
+      try { window.opener.postMessage({ type: 'kubocare-editor-ready' }, '*'); } catch (err) {
+        console.error('[kubocare] postMessage to opener failed', err);
+      }
+    };
+    const pingTimers: number[] = [];
+    if (!applied && window.opener) {
+      setKubocareStatus('waiting');
+      pingOpener();
+      [400, 1000, 2000, 4000].forEach(ms => {
+        pingTimers.push(window.setTimeout(pingOpener, ms));
+      });
+    } else if (!applied) {
+      setKubocareStatus('no-opener');
+    }
+
+    return () => {
+      unsubscribe();
+      pingTimers.forEach(id => clearTimeout(id));
+    };
+  }, []);
+
+  const [pushFeedback, setPushFeedback] = useState<'idle' | 'sent' | 'no-opener'>('idle');
+  const pushToKubocare = () => {
+    const tab = tabs[activeIdx];
+    if (!tab) { console.warn('[kubocare] push aborted: no active tab'); return; }
+    if (!window.opener || window.opener.closed) {
+      console.warn('[kubocare] push aborted: window.opener missing/closed');
+      setPushFeedback('no-opener');
+      setTimeout(() => setPushFeedback('idle'), 2400);
+      return;
+    }
+    const payload = {
+      type: 'kubocare-room-update',
+      config: {
+        room: tab.room,
+        objects: tab.objects.map(o => ({
+          type: o.type,
+          label: o.label,
+          x: o.x, y: o.y,
+          width: o.width, height: o.height,
+          rotation: o.rotation,
+          color: o.color,
+        })),
+      },
+    };
+    try {
+      window.opener.postMessage(payload, '*');
+      console.info('[kubocare] pushed room with', payload.config.objects.length, 'objects');
+      setPushFeedback('sent');
+      setTimeout(() => setPushFeedback('idle'), 1600);
+    } catch (err) {
+      console.error('[kubocare] push failed', err);
+      setPushFeedback('no-opener');
+      setTimeout(() => setPushFeedback('idle'), 2400);
+    }
+  };
+
+  if (embedMode === '3d-embed' && embedConfig) {
+    return <Room3DViewer room={embedConfig.room} objects={embedConfig.objects} onClose={() => {}} embed />;
+  }
+
+  // ── Listen for messages from mSIM / KuboCare ───────────────────────────────
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
-      if (ev.data && ev.data.type === 'msim-place-radar' && ev.data.position) {
+      if (!ev.data || !ev.data.type) return;
+      if (ev.data.type === 'msim-place-radar' && ev.data.position) {
         const { x, y } = ev.data.position;
         const preset = OBJECT_PRESETS['radar'];
         const obj: RoomObject = {
@@ -305,6 +427,27 @@ export default function App() {
           marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
         };
         setTabs(prev => prev.map((t, i) => i === activeIdx ? { ...t, objects: [...t.objects, obj], selectedId: obj.id } : t));
+      }
+      if (ev.data.type === 'import-kubocare' && ev.data.room && ev.data.objects) {
+        const r = ev.data.room;
+        const objs: RoomObject[] = ev.data.objects.map((o: any) => {
+          const preset = OBJECT_PRESETS[o.type as keyof typeof OBJECT_PRESETS] || OBJECT_PRESETS['custom'];
+          return {
+            id: genId(), type: o.type, label: o.label || o.type,
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            color: preset.color, rotation: o.rotation ?? 0,
+            marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+          };
+        });
+        const newTab: TabState = {
+          id: genId(), label: r.name || 'KuboCare Import',
+          area: `${(r.width * r.height).toFixed(1)} m²`,
+          room: { name: r.name, width: r.width, height: r.height },
+          objects: objs, selectedId: null, adjacentRooms: [],
+        };
+        setTabs([newTab]);
+        setActiveIdx(0);
+        if (ev.data.mode === '3D') setShow3D(true);
       }
     }
     window.addEventListener('message', onMessage);
@@ -320,18 +463,6 @@ export default function App() {
   const { room, objects, selectedId, adjacentRooms } = tab;
   const selectedObject = objects.find(o => o.id === selectedId) ?? null;
   const radarObj       = objects.find(o => o.type === 'radar')  ?? null;
-
-  // Detect margin overlaps whenever objects change (from import, add, move, etc.)
-  const [exportPreview, setExportPreview] = useState<Record<string, unknown>[] | null>(null);
-  useEffect(() => {
-    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
-    if (exportable.length < 2) { setMarginAlert(null); setExportPreview(null); return; }
-    const config = buildConfig(objects, '<board>', room.name || '', room) as any;
-    const clamped: string[] = config._clampedMargins || [];
-    delete config._clampedMargins;
-    setExportPreview(config.objects || []);
-    setMarginAlert(clamped.length > 0 ? clamped : null);
-  }, [objects, room]);
 
   // ── Object handlers (all scoped to active tab) ──────────────────────────────
   function handleAdd(type: ObjectType) {
@@ -434,9 +565,7 @@ export default function App() {
 
   function handleExportConfirm(board: string, location: string) {
     setShowExport(false);
-    const config = buildConfig(objects, board, location, room) as any;
-    const clamped: string[] = config._clampedMargins || [];
-    delete config._clampedMargins;
+    const config = buildConfig(objects, board, location, room);
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -444,7 +573,20 @@ export default function App() {
     a.download = `${board}_${tab.label.replace(/\s+/g,'_')}_config.json`;
     a.click();
     URL.revokeObjectURL(url);
-    if (clamped.length > 0) setMarginAlert(clamped);
+  }
+
+  function handleExportKuboCare() {
+    const config = {
+      room: { name: room.name || tab.label, width: room.width, height: room.height },
+      objects: objects.map(o => ({ type: o.type, label: o.label, x: +o.x.toFixed(3), y: +o.y.toFixed(3), width: +o.width.toFixed(3), height: +o.height.toFixed(3), rotation: o.rotation ?? 0 })),
+    };
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(room.name || tab.label).replace(/\s+/g, '_')}_kubocare.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleAddTab() {
@@ -485,19 +627,6 @@ export default function App() {
     >
       {/* Gradient cap */}
       <div className="h-[2px] shrink-0" style={{ background: 'linear-gradient(90deg, #c8506b, #a03050, #c8506b)' }} />
-
-      {marginAlert && (
-        <div style={{ background: 'rgba(234,179,8,0.15)', border: '1px solid rgba(234,179,8,0.4)', padding: '10px 16px', display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12, color: '#eab308', flexShrink: 0 }}>
-          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠</span>
-          <div style={{ flex: 1 }}>
-            <strong style={{ fontSize: 12 }}>Margins auto-adjusted to prevent overlap</strong>
-            <div style={{ marginTop: 4, color: dark ? '#a3a3a3' : '#737373', lineHeight: 1.5 }}>
-              {marginAlert.map((msg, i) => <div key={i}>{msg}</div>)}
-            </div>
-          </div>
-          <button onClick={() => setMarginAlert(null)} style={{ background: 'none', border: 'none', color: '#eab308', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1 }}>×</button>
-        </div>
-      )}
 
       {/* ── Header ── */}
       <header style={{ background: tabBarBg, borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', height: 52, flexShrink: 0 }}>
@@ -540,6 +669,11 @@ export default function App() {
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, background: dark ? 'rgba(6,182,212,0.1)' : 'rgba(6,182,212,0.08)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.25)', transition: 'all 0.15s' }}
           >⬡ 3D</button>
 
+          <button onClick={() => setShowMovement(true)}
+            title="Visualise radar movement/tracking data from a CSV over this room"
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 13px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', background: dark ? 'rgba(244,63,94,0.1)' : 'rgba(244,63,94,0.08)', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.25)', transition: 'all 0.15s' }}
+          >🏃 Movement</button>
+
           <button onClick={() => {
               const kcroom = buildKcroom(room, objects);
               const plan = {
@@ -570,6 +704,28 @@ export default function App() {
           <button onClick={() => setShowExport(true)} disabled={objects.length === 0}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(99,102,241,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
           >↓ Export</button>
+
+          <button onClick={handleExportKuboCare} disabled={objects.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: 'linear-gradient(135deg,#10b981,#059669)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(16,185,129,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
+          >↓ KuboCare</button>
+
+          {kubocareEditMode && (
+            <button onClick={pushToKubocare} disabled={objects.length === 0}
+              title="Send the current room back to the KuboCare visualizer"
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 16px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: objects.length === 0 ? 'not-allowed' : 'pointer', opacity: objects.length === 0 ? 0.35 : 1, color: '#fff', background: pushFeedback === 'sent' ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : pushFeedback === 'no-opener' ? 'linear-gradient(135deg,#f97316,#c2410c)' : 'linear-gradient(135deg,#ec4899,#be185d)', boxShadow: objects.length > 0 ? '0 2px 12px rgba(236,72,153,0.45)' : 'none', border: 'none', transition: 'all 0.15s' }}
+            >
+              {pushFeedback === 'sent' ? '✓ Pushed' : pushFeedback === 'no-opener' ? '⚠ No KuboCare tab' : '⇧ Push to KuboCare'}
+            </button>
+          )}
+          {kubocareStatus !== 'idle' && (
+            <span title="KuboCare connection status"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+                background: kubocareStatus === 'loaded' ? 'rgba(16,185,129,0.18)' : kubocareStatus === 'waiting' ? 'rgba(234,179,8,0.18)' : 'rgba(239,68,68,0.18)',
+                color: kubocareStatus === 'loaded' ? '#10b981' : kubocareStatus === 'waiting' ? '#eab308' : '#ef4444',
+                border: `1px solid ${kubocareStatus === 'loaded' ? 'rgba(16,185,129,0.4)' : kubocareStatus === 'waiting' ? 'rgba(234,179,8,0.4)' : 'rgba(239,68,68,0.4)'}` }}>
+              {kubocareStatus === 'loaded' ? '● KuboCare linked' : kubocareStatus === 'waiting' ? '● Waiting…' : '● No opener'}
+            </span>
+          )}
         </div>
       </header>
 
@@ -691,12 +847,14 @@ export default function App() {
 
       {show3D && <Room3DViewer room={room} objects={objects} onClose={() => setShow3D(false)} />}
 
+      {showMovement && <MovementViewer room={room} objects={objects} dark={dark} onClose={() => setShowMovement(false)} />}
+
       {showImport && (
         <ImportImageModal dark={dark} onImport={handleImportData} onCancel={() => setShowImport(false)} />
       )}
 
       {showExport && (
-        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} objectsPreview={exportPreview} marginWarnings={marginAlert} />
+        <ExportModal dark={dark} onConfirm={handleExportConfirm} onCancel={() => setShowExport(false)} />
       )}
     </div>
   );

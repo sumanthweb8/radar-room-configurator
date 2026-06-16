@@ -916,14 +916,13 @@ cameraSideLeft.lookAt(0, 0, 0);
 let camera = cameraPersp;        // alias to currently-main camera (rebindable)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-// Soft shadows (#117): PCF-soft for blurred edges; bias compensates the
-// orthographic shadow camera's depth quantisation so non-overlapping
-// coplanar geometry doesn't shadow-acne against itself.
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.autoClear = false;       // we control clears per viewport
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.autoClear = false;
 wrap.appendChild(renderer.domElement);
 
 const controlsPersp = new OrbitControls(cameraPersp, renderer.domElement);
@@ -991,13 +990,10 @@ function _scheduleCameraSave() {
 }
 controlsPersp.addEventListener('change', _scheduleCameraSave);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+const ambient = new THREE.AmbientLight(0xfff4e8, 0.55);
 scene.add(ambient);
-const dl = new THREE.DirectionalLight(0xffffff, 0.85);
+const dl = new THREE.DirectionalLight(0xffeedd, 1.05);
 dl.position.set(6, 12, 8);
-// Soft shadow caster (#117). Orthographic shadow camera sized to cover any
-// practical apartment (±10 m around scene origin); 2048² shadow map gives
-// adequate resolution at this scale without thrashing GPU memory.
 dl.castShadow = true;
 dl.shadow.mapSize.set(2048, 2048);
 dl.shadow.camera.left   = -10;
@@ -1010,12 +1006,15 @@ dl.shadow.bias          = -0.0005;
 dl.shadow.normalBias    = 0.02;
 dl.shadow.camera.updateProjectionMatrix();
 scene.add(dl);
+const fillLight = new THREE.DirectionalLight(0xb8d4ff, 0.3);
+fillLight.position.set(-4, 3, 6);
+scene.add(fillLight);
 
 // Lighting presets (#118). Drives the directional + ambient light pair plus
 // the shadow-cast toggle. User picks via the top-bar dropdown; choice
 // persists to localStorage so it survives reloads.
 const LIGHTING_PRESETS = {
-  studio:   { dlInt: 0.85, ambInt: 0.65, dlPos: [6, 12, 8],         shadows: true },
+  studio:   { dlInt: 1.05, ambInt: 0.55, dlPos: [6, 12, 8],         shadows: true },
   diffuse:  { dlInt: 0.45, ambInt: 0.85, dlPos: [6, 12, 8],         shadows: true },
   overhead: { dlInt: 0.85, ambInt: 0.55, dlPos: [0.01, 14, 0.01],   shadows: true },
   off:      { dlInt: 0.85, ambInt: 0.65, dlPos: [6, 12, 8],         shadows: false },
@@ -1098,15 +1097,15 @@ const HEATMAP_CELL_SIZE = 0.20;  // 20 cm cells per SPEC §4.5 default
 let currentRoomData = null;
 
 const palette = {
-  floor:    0xdddddd,
-  ceiling:  0xeeeeee,
-  wall:     0xc8c8c8,
-  wallEdge: 0x888888,
-  bed:      0x4a7c59,
-  sofa:     0x6c8cb5,
-  table:    0x8b5a2b,
-  chair:    0x666666,
-  storage:  0x9b9b9b,
+  floor:    0xb07840,
+  ceiling:  0xffffff,
+  wall:     0xf5f0ea,
+  wallEdge: 0xd0c8be,
+  bed:      0x5c3d1e,
+  sofa:     0x6B8E6B,
+  table:    0xD4A574,
+  chair:    0xCD853F,
+  storage:  0x8B7355,
   refrigerator: 0xd0d0e8,
   stove:    0x707070,
   oven:     0x707070,
@@ -1114,6 +1113,11 @@ const palette = {
   toilet:   0xffffff,
   sink:     0xe8e8ee,
   washer_dryer: 0xb0b0c0,
+  wardrobe: 0x6B4226,
+  cabinet:  0x8B7355,
+  desk:     0xA0522D,
+  door:     0xC4A882,
+  window:   0xdedede,
   default:  0x999999
 };
 
@@ -1127,11 +1131,24 @@ function buildShape(boundary) {
 function buildFloor(boundary) {
   const shape = buildShape(boundary);
   const geo = new THREE.ShapeGeometry(shape);
-  geo.rotateX(-Math.PI / 2);   // plan XY → world XZ
-  const mat = new THREE.MeshStandardMaterial({ color: palette.floor, side: THREE.DoubleSide });
+  geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
+  const fC = document.createElement('canvas'); fC.width = 512; fC.height = 512;
+  const fc = fC.getContext('2d');
+  fc.fillStyle = '#b07840'; fc.fillRect(0, 0, 512, 512);
+  fc.strokeStyle = '#986030'; fc.lineWidth = 1.5;
+  for (let i = 0; i < 512; i += 80) { fc.beginPath(); fc.moveTo(0, i); fc.lineTo(512, i); fc.stroke(); }
+  fc.strokeStyle = '#a06838'; fc.lineWidth = 0.5;
+  for (let j = 0; j < 512; j += 160) { fc.beginPath(); fc.moveTo(j, 0); fc.lineTo(j, 512); fc.stroke(); }
+  const fTex = new THREE.CanvasTexture(fC);
+  fTex.wrapS = fTex.wrapT = THREE.RepeatWrapping;
+  const xs = boundary.map(p => p[0]), ys = boundary.map(p => p[1]);
+  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+  fTex.repeat.set(bw * 1.2, bh * 1.2);
+  const mat = new THREE.MeshStandardMaterial({ map: fTex, roughness: 0.55, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.kind = 'floor';
-  mesh.receiveShadow = true;          // floor catches every shadow (#117)
+  mesh.receiveShadow = true;
   return mesh;
 }
 
@@ -1139,8 +1156,9 @@ function buildCeiling(boundary, height) {
   const shape = buildShape(boundary);
   const geo = new THREE.ShapeGeometry(shape);
   geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
   geo.translate(0, height, 0);
-  const mat = new THREE.MeshStandardMaterial({ color: palette.ceiling, side: THREE.DoubleSide, transparent: true, opacity: 0.4 });
+  const mat = new THREE.MeshStandardMaterial({ color: palette.ceiling, roughness: 1, side: THREE.DoubleSide, transparent: true, opacity: 0.08 });
   const m = new THREE.Mesh(geo, mat);
   m.userData.kind = 'ceiling';
   return m;
@@ -1177,23 +1195,26 @@ function buildWall(a, b, height, opening) {
 
   const geo = new THREE.ShapeGeometry(shape);
   const mat = new THREE.MeshStandardMaterial({
-    color: palette.wall, side: THREE.DoubleSide,
-    transparent: true, opacity: 0.55
+    color: palette.wall, roughness: 0.9, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.65
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.kind = 'wall';
 
-  // Place: wall starts at a, extends to b, rises in world Y.
-  // Convention: JSON y_plan maps to world -Z (matching the floor's rotateX(-π/2)).
-  // Local +X axis of geo (along the wall) should point from a to b in world XZ.
-  const angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
-  mesh.position.set(a[0], 0, -a[1]);
+  const angle = Math.atan2(a[1] - b[1], b[0] - a[0]);
+  mesh.position.set(a[0], 0, a[1]);
   mesh.rotation.y = angle;
 
-  // Edge outline
   const edges = new THREE.EdgesGeometry(geo);
   const lines = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: palette.wallEdge }));
   mesh.add(lines);
+
+  // Skirting board
+  const skGeo = new THREE.BoxGeometry(L, 0.09, 0.02);
+  const skMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d5, roughness: 0.8 });
+  const sk = new THREE.Mesh(skGeo, skMat);
+  sk.position.set(L / 2, 0.045, 0.01);
+  mesh.add(sk);
 
   return mesh;
 }
@@ -1217,71 +1238,372 @@ function extrudePlanRect(minx, maxx, miny, maxy, height, yBase, mat) {
   ]);
   const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
   geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
   if (yBase) geo.translate(0, yBase, 0);
   return new THREE.Mesh(geo, mat);
 }
 
-function buildSofaRecliner(obj) {
-  // Render a Sofa as a recliner. Depth axis = X (back at max-X, footrest at min-X).
-  // The footrest extends 0.40 m beyond the bbox front to show "fully reclined" pose.
+// Detailed furniture helpers
+function dBox(w, h, d, color, rough, metal) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: rough || 0.75, metalness: metal || 0, side: THREE.DoubleSide });
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+function dCyl(r, h, color, rough, metal) {
+  const geo = new THREE.CylinderGeometry(r, r, h, 12);
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: rough || 0.7, metalness: metal || 0 });
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
+function buildBedDetailed(w, d) {
+  const g = new THREE.Group();
+  const legH = 0.15, frameH = 0.12, mattH = 0.20, headH = 0.55, footH = 0.25;
+  const frameTop = legH + frameH;
+  // Frame
+  const frame = dBox(w, legH + frameH, d, 0x5c3d1e, 0.8);
+  frame.position.set(0, (legH + frameH) / 2, 0); g.add(frame);
+  // Mattress
+  const matt = dBox(w - 0.06, mattH, d - 0.06, 0xf0ede8, 0.9);
+  matt.position.set(0, frameTop + mattH / 2, 0); g.add(matt);
+  // Cylindrical legs
+  [[-w/2+0.05, -d/2+0.05], [w/2-0.05, -d/2+0.05], [-w/2+0.05, d/2-0.05], [w/2-0.05, d/2-0.05]].forEach(([lx,lz]) => {
+    const leg = dCyl(0.025, legH, 0x2a1a08); leg.position.set(lx, legH/2, lz); g.add(leg);
+  });
+  // Headboard
+  const hb = dBox(w, headH, 0.08, 0x3b2510, 0.7);
+  hb.position.set(0, legH + headH / 2, -d/2 + 0.04); g.add(hb);
+  // Footboard
+  const fb = dBox(w, footH, 0.07, 0x3b2510, 0.7);
+  fb.position.set(0, legH + footH / 2, d/2 - 0.035); g.add(fb);
+  // Pillows (white)
+  const pilH = 0.08, pilW = (w - 0.2) / 2;
+  const pilZ = -d/2 + 0.04 + pilH, pilY = frameTop + mattH + pilH / 2;
+  const pL = dBox(pilW, pilH, Math.min(0.5, d * 0.15), 0xffffff, 0.95);
+  pL.position.set(-(pilW / 2 + 0.02), pilY, pilZ); g.add(pL);
+  const pR = dBox(pilW, pilH, Math.min(0.5, d * 0.15), 0xffffff, 0.95);
+  pR.position.set((pilW / 2 + 0.02), pilY, pilZ); g.add(pR);
+  // Bedding (blue)
+  const bedding = dBox(w - 0.1, mattH + 0.04, (d - 0.06) * 0.55, 0x7fa8cc, 0.9);
+  bedding.position.set(0, frameTop + mattH / 2, (d - 0.06) * 0.225); g.add(bedding);
+  return g;
+}
+
+function buildSofaDetailed(w, d) {
+  const g = new THREE.Group();
+  const col = 0x6B8E6B;
+  const dark = new THREE.Color(col).multiplyScalar(0.60).getHex();
+  const legH = 0.10, backD = Math.min(d * 0.22, 0.26), seatD = d - backD;
+  const seatH = 0.38, backH = 0.52, armW = Math.min(0.13, w * 0.09);
+  // Cylindrical legs
+  [[-w/2+0.10, -d/2+0.10], [w/2-0.10, -d/2+0.10], [-w/2+0.10, d/2-0.10], [w/2-0.10, d/2-0.10]].forEach(([lx,lz]) => {
+    const leg = dCyl(0.03, legH, 0x2a1a08); leg.position.set(lx, legH/2, lz); g.add(leg);
+  });
+  // Back
+  const back = dBox(w, backH, backD, dark, 0.8);
+  back.position.set(0, legH + seatH * 0.25 + backH / 2, -d/2 + backD / 2); g.add(back);
+  // Seat
+  const seat = dBox(w, seatH, seatD, col, 0.85);
+  seat.position.set(0, legH + seatH / 2, -d/2 + backD + seatD / 2); g.add(seat);
+  // Arms (darker)
+  const armH = seatH + backH * 0.55;
+  const armL = dBox(armW, armH, d, dark, 0.8);
+  armL.position.set(-(w/2 - armW/2), legH + armH / 2, 0); g.add(armL);
+  const armR = dBox(armW, armH, d, dark, 0.8);
+  armR.position.set((w/2 - armW/2), legH + armH / 2, 0); g.add(armR);
+  // Seat cushions
+  const n = w > 1.5 ? 3 : 2;
+  const cw = (w - armW * 2 - 0.04) / n;
+  for (let i = 0; i < n; i++) {
+    const cx2 = -(w/2 - armW) + cw/2 + i * cw;
+    const cush = dBox(cw - 0.04, 0.13, seatD - 0.04, col, 0.9);
+    cush.position.set(cx2, legH + seatH + 0.065, -d/2 + backD + seatD / 2); g.add(cush);
+  }
+  // Back cushion
+  const bc = dBox(w - armW * 2 - 0.06, backH * 0.65, 0.09, col, 0.9);
+  bc.position.set(0, legH + seatH * 0.15 + backH * 0.33, -d/2 + backD - 0.04); g.add(bc);
+  return g;
+}
+
+function buildDoorDetailed(dw) {
+  const g = new THREE.Group();
+  const dH = 2.1, frameT = 0.07, panelD = 0.05;
+  // Frame jambs + header
+  const jL = dBox(frameT, dH + frameT, frameT, 0x8b6340);
+  jL.position.set(-dw/2, dH/2, 0); g.add(jL);
+  const jR = dBox(frameT, dH + frameT, frameT, 0x8b6340);
+  jR.position.set(dw/2, dH/2, 0); g.add(jR);
+  const header = dBox(dw + frameT * 2, frameT, frameT, 0x8b6340);
+  header.position.set(0, dH, 0); g.add(header);
+  // Panel
+  const panel = dBox(dw - 0.04, dH - 0.02, panelD, 0xc49a6c, 0.55);
+  panel.position.set(0, dH / 2, 0); g.add(panel);
+  // Inset panels
+  const iw = dw * 0.78;
+  const ip1 = dBox(iw, dH * 0.35, 0.012, 0xa07040);
+  ip1.position.set(0, dH * 0.76, panelD / 2 + 0.006); g.add(ip1);
+  const ip2 = dBox(iw, dH * 0.40, 0.012, 0xa07040);
+  ip2.position.set(0, dH * 0.30, panelD / 2 + 0.006); g.add(ip2);
+  // Sphere handle (brass)
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.1 });
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 10), handleMat);
+  handle.castShadow = true;
+  handle.position.set(dw/2 - 0.12, dH * 0.46, panelD / 2 + 0.022); g.add(handle);
+  // Bar handle
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.09, 8), handleMat.clone());
+  bar.castShadow = true; bar.rotation.z = Math.PI / 2;
+  bar.position.set(dw/2 - 0.165, dH * 0.46, panelD / 2 + 0.022); g.add(bar);
+  return g;
+}
+
+function buildWindowDetailed(ww) {
+  const g = new THREE.Group();
+  const wH = 1.15, fT = 0.055, fD = 0.10;
+  const sillH = 0.06, sillD = 0.12;
+  const frameMat2 = new THREE.MeshStandardMaterial({ color: 0xedf0f2, roughness: 0.65, metalness: 0.05 });
+  const sillMat = new THREE.MeshStandardMaterial({ color: 0xdce1e7, roughness: 0.55 });
+  // Outer frame rails + jambs
+  const tRail = new THREE.Mesh(new THREE.BoxGeometry(ww + fT*2, fT, fD), frameMat2);
+  tRail.castShadow = true; tRail.position.set(0, wH + fT/2, -fD/2); g.add(tRail);
+  const bRail = new THREE.Mesh(new THREE.BoxGeometry(ww + fT*2, fT, fD), frameMat2);
+  bRail.castShadow = true; bRail.position.set(0, fT/2, -fD/2); g.add(bRail);
+  const lJamb = new THREE.Mesh(new THREE.BoxGeometry(fT, wH + fT*2, fD), frameMat2);
+  lJamb.castShadow = true; lJamb.position.set(-(ww/2 + fT/2), (wH + fT*2)/2, -fD/2); g.add(lJamb);
+  const rJamb = new THREE.Mesh(new THREE.BoxGeometry(fT, wH + fT*2, fD), frameMat2);
+  rJamb.castShadow = true; rJamb.position.set((ww/2 + fT/2), (wH + fT*2)/2, -fD/2); g.add(rJamb);
+  // Mid-rail + vertical mullion
+  const midRail = new THREE.Mesh(new THREE.BoxGeometry(ww, fT, fD * 0.7), frameMat2);
+  midRail.position.set(0, wH/2, -fD/2); g.add(midRail);
+  const nPanes = ww > 1.0 ? 2 : 1;
+  if (nPanes > 1) {
+    const mull = new THREE.Mesh(new THREE.BoxGeometry(fT, wH, fD * 0.7), frameMat2);
+    mull.position.set(0, wH/2, -fD/2); g.add(mull);
+  }
+  // Glass panes (MeshPhysicalMaterial for realistic glass)
+  const outerGlass = new THREE.MeshPhysicalMaterial({
+    color: 0xadd8f0, transparent: true, opacity: 0.25,
+    roughness: 0.02, metalness: 0.0, reflectivity: 0.8,
+    transmission: 0.7, thickness: 0.01
+  });
+  const innerGlass = new THREE.MeshPhysicalMaterial({
+    color: 0xc8e8f8, transparent: true, opacity: 0.18,
+    roughness: 0.04, metalness: 0.0, reflectivity: 0.9,
+    transmission: 0.8, thickness: 0.01, side: THREE.DoubleSide
+  });
+  const pW = (ww - fT * (nPanes + 1)) / nPanes;
+  const pHtop = wH/2 - fT * 1.5, pHbot = wH/2 - fT * 1.5;
+  const pYtop = wH/2 + fT/2 + pHtop/2, pYbot = fT + pHbot/2;
+  for (let col = 0; col < nPanes; col++) {
+    const px = (col - (nPanes - 1) / 2) * (pW + fT);
+    const tO = new THREE.Mesh(new THREE.BoxGeometry(pW, pHtop, 0.008), outerGlass);
+    tO.position.set(px, pYtop, -0.001); g.add(tO);
+    const tI = new THREE.Mesh(new THREE.BoxGeometry(pW, pHtop, 0.008), innerGlass);
+    tI.position.set(px, pYtop, -fD + 0.001); g.add(tI);
+    const bO = new THREE.Mesh(new THREE.BoxGeometry(pW, pHbot, 0.008), outerGlass);
+    bO.position.set(px, pYbot, -0.001); g.add(bO);
+    const bI = new THREE.Mesh(new THREE.BoxGeometry(pW, pHbot, 0.008), innerGlass);
+    bI.position.set(px, pYbot, -fD + 0.001); g.add(bI);
+    // Glint highlight (sky reflection)
+    const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18 });
+    const glint = new THREE.Mesh(new THREE.BoxGeometry(pW * 0.6, pHtop * 0.12, 0.001), glintMat);
+    glint.position.set(px - pW * 0.1, pYtop + pHtop * 0.28, 0.001); g.add(glint);
+  }
+  // Sill (protrudes into room)
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(ww + fT*2 + 0.04, sillH, sillD), sillMat);
+  sill.castShadow = true; sill.position.set(0, sillH/2, sillD/2 - 0.01); g.add(sill);
+  // Daylight glow
+  const dayGlow = new THREE.PointLight(0xd4eeff, 0.5, 3.5);
+  dayGlow.position.set(0, wH/2, 0.8); g.add(dayGlow);
+  return g;
+}
+
+function buildTableDetailed(w, d) {
+  const g = new THREE.Group();
+  const top = dBox(w, 0.05, d, 0xa0784a, 0.6);
+  top.position.set(0, 0.73, 0); g.add(top);
+  [[-w/2+0.06, -d/2+0.06], [w/2-0.06, -d/2+0.06], [-w/2+0.06, d/2-0.06], [w/2-0.06, d/2-0.06]].forEach(([lx,lz]) => {
+    const leg = dCyl(0.025, 0.70, 0x6b4f2e); leg.position.set(lx, 0.35, lz); g.add(leg);
+  });
+  return g;
+}
+
+function buildDeskDetailed(w, d) {
+  const g = new THREE.Group();
+  const top = dBox(w, 0.04, d, 0x7a5c3a, 0.6);
+  top.position.set(0, 0.74, 0); g.add(top);
+  const panelL = dBox(0.04, 0.72, d, 0x5c3d1e);
+  panelL.position.set(-w/2 + 0.02, 0.36, 0); g.add(panelL);
+  const panelR = dBox(0.04, 0.72, d, 0x5c3d1e);
+  panelR.position.set(w/2 - 0.02, 0.36, 0); g.add(panelR);
+  return g;
+}
+
+function buildChairDetailed(w, d) {
+  const g = new THREE.Group();
+  const legH = 0.44;
+  [[-w/2+0.05, -d/2+0.05], [w/2-0.05, -d/2+0.05], [-w/2+0.05, d/2-0.05], [w/2-0.05, d/2-0.05]].forEach(([lx,lz]) => {
+    const leg = dCyl(0.016, legH, 0x5c3d1e); leg.position.set(lx, legH/2, lz); g.add(leg);
+  });
+  const seat = dBox(w, 0.06, d, 0xCD853F, 0.85);
+  seat.position.set(0, legH + 0.03, 0); g.add(seat);
+  const back = dBox(w, 0.42, 0.06, 0xCD853F, 0.85);
+  back.position.set(0, legH + 0.06 + 0.21, -d/2 + 0.03); g.add(back);
+  return g;
+}
+
+function buildWardrobeDetailed(w, d) {
+  const g = new THREE.Group();
+  const wH = 2.0;
+  const body = dBox(w, wH, d, 0x7a5c3a, 0.75);
+  body.position.set(0, wH/2, 0); g.add(body);
+  const dw2 = (w - 0.04) / 2;
+  [-(dw2/2 + 0.01), (dw2/2 + 0.01)].forEach(dx => {
+    const dr = dBox(dw2, wH - 0.06, 0.025, 0x9a7050, 0.65);
+    dr.position.set(dx, wH/2, d/2 + 0.012); g.add(dr);
+    const hGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.1, 8);
+    const hMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8 });
+    const hndl = new THREE.Mesh(hGeo, hMat);
+    hndl.rotation.x = Math.PI / 2;
+    hndl.position.set(dx, wH * 0.48, d/2 + 0.025); g.add(hndl);
+  });
+  return g;
+}
+
+function buildCabinetDetailed(w, d) {
+  const g = new THREE.Group();
+  const h2 = Math.max(0.5, Math.min(w, d) * 1.8);
+  const body = dBox(w, h2, d, 0x8b7355, 0.7);
+  body.position.set(0, h2/2, 0); g.add(body);
+  const front = dBox(w - 0.02, h2 - 0.04, 0.02, 0xa08060, 0.6);
+  front.position.set(0, h2/2, d/2 + 0.01); g.add(front);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.2 }));
+  knob.position.set(0, h2 * 0.5, d/2 + 0.022); g.add(knob);
+  return g;
+}
+
+function buildTVDetailed(tvW) {
+  const g = new THREE.Group();
+  const screenH = tvW * 0.58, depth = 0.06, bezel = 0.025;
+  // Outer casing
+  const casing = dBox(tvW, screenH + bezel * 2, depth, 0x111111, 0.3, 0.5);
+  casing.position.set(0, (screenH + bezel * 2) / 2, 0); g.add(casing);
+  // Emissive screen
+  const screenMat = new THREE.MeshStandardMaterial({ color: 0x0a2240, emissive: 0x0d3060, emissiveIntensity: 0.6, roughness: 0.1, metalness: 0.2 });
+  const screen = new THREE.Mesh(new THREE.BoxGeometry(tvW - bezel * 2, screenH, 0.01), screenMat);
+  screen.position.set(0, (screenH + bezel * 2) / 2, depth / 2 + 0.006); g.add(screen);
+  // UI grid lines
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0x1a4a80, transparent: true, opacity: 0.4 });
+  for (let i = 0; i < 3; i++) {
+    const ln = new THREE.Mesh(new THREE.BoxGeometry(tvW - bezel * 2, 0.008, 0.001), lineMat);
+    ln.position.set(0, screenH * 0.25 + i * (screenH * 0.25), depth / 2 + 0.008); g.add(ln);
+  }
+  // Wall bracket
+  const bracket = dBox(0.08, 0.18, 0.06, 0x333333, 0.5, 0.6);
+  bracket.position.set(0, -0.05, -depth / 2 + 0.03); g.add(bracket);
+  // Power LED
+  const ledMat = new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00aa00, emissiveIntensity: 3 });
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 8), ledMat);
+  led.position.set(tvW / 2 - 0.04, bezel, depth / 2 + 0.005); g.add(led);
+  return g;
+}
+
+// Find nearest wall edge for wall-snapping doors/windows/TVs
+function nearestWallSim(boundary, planX, planY) {
+  const N = boundary.length;
+  let area = 0;
+  for (let i = 0; i < N; i++) {
+    const [x1, y1] = boundary[i];
+    const [x2, y2] = boundary[(i + 1) % N];
+    area += x1 * y2 - x2 * y1;
+  }
+  let bestDist = Infinity, bestPx = planX, bestPy = planY, bestRy = 0;
+  for (let i = 0; i < N; i++) {
+    const [x1, y1] = boundary[i];
+    const [x2, y2] = boundary[(i + 1) % N];
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.01) continue;
+    let t = ((planX - x1) * dx + (planY - y1) * dy) / (len * len);
+    t = Math.max(0, Math.min(1, t));
+    const px = x1 + t * dx, py = y1 + t * dy;
+    const dd = Math.sqrt((planX - px) ** 2 + (planY - py) ** 2);
+    if (dd < bestDist) {
+      bestDist = dd;
+      bestPx = px;
+      bestPy = py;
+      bestRy = area > 0 ? Math.atan2(-dy, dx) : Math.atan2(dy, -dx);
+    }
+  }
+  return { wx: bestPx, wz: bestPy, ry: bestRy, dist: bestDist };
+}
+
+function buildFurniture(obj, boundary) {
+  const t = (obj.type || '').toLowerCase();
   const fp = obj.footprint;
   if (!fp || fp.length < 3) return null;
   const xs = fp.map(p => p[0]), ys = fp.map(p => p[1]);
   const minx = Math.min(...xs), maxx = Math.max(...xs);
   const miny = Math.min(...ys), maxy = Math.max(...ys);
-  const w = maxx - minx;   // depth (back ↔ front)
-  const d = maxy - miny;   // width (side ↔ side)
-  if (w < 0.2 || d < 0.2) return null;
+  const w = maxx - minx, d = maxy - miny;
+  if (w < 0.05 || d < 0.05) return null;
+  const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
 
-  const color = palette.sofa || palette.default;
-  const mat = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
+  // Wall-snapped types: door, window, television
+  const isTV = t === 'television' || (obj.label && /tv|television|tele/i.test(obj.label));
+  if ((t === 'door' || t === 'window' || isTV) && boundary) {
+    const near = nearestWallSim(boundary, cx, cy);
+    let group;
+    if (t === 'door') {
+      group = buildDoorDetailed(Math.max(w, d));
+      group.position.set(near.wx, 0, near.wz);
+    } else if (t === 'window') {
+      group = buildWindowDetailed(Math.max(w, d));
+      group.position.set(near.wx, 0.9, near.wz);
+    } else {
+      group = buildTVDetailed(Math.max(w, d));
+      group.position.set(near.wx, 1.1, near.wz);
+    }
+    group.rotation.y = near.ry;
+    group.userData = obj;
+    return group;
+  }
 
-  const EXT_FOOT  = 0.40;                   // footrest stick-out beyond bbox front
-  const xBackStart = minx + 0.75 * w;       // backrest: rear 25% of bbox
-  const xSeatStart = minx + 0.25 * w;       // seat: middle 50% of bbox
-  const xFootStart = minx - EXT_FOOT;       // footrest starts 0.40 m beyond min-X
+  let group = null;
+  switch (t) {
+    case 'bed': group = buildBedDetailed(w, d); break;
+    case 'sofa': group = buildSofaDetailed(w, d); break;
+    case 'table': group = buildTableDetailed(w, d); break;
+    case 'desk': group = buildDeskDetailed(w, d); break;
+    case 'chair': group = buildChairDetailed(w, d); break;
+    case 'wardrobe': group = buildWardrobeDetailed(w, d); break;
+    case 'cabinet': case 'storage': group = buildCabinetDetailed(w, d); break;
+    default: {
+      const h = obj.height || 0.5;
+      const yBase = obj.yBase || 0;
+      let verts = fp;
+      if (signedArea(verts) < 0) verts = [...verts].reverse();
+      const shape = new THREE.Shape(verts.map(p => new THREE.Vector2(p[0], p[1])));
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+      geo.rotateX(-Math.PI / 2);
+      geo.scale(1, 1, -1);
+      if (yBase > 0) geo.translate(0, yBase, 0);
+      const color = palette[t] !== undefined ? palette[t] : palette.default;
+      const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.75, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.userData = obj;
+      return mesh;
+    }
+  }
 
-  const group = new THREE.Group();
-  group.add(extrudePlanRect(xFootStart, xSeatStart, miny, maxy, 0.45, 0, mat));  // footrest (extended, level with seat)
-  group.add(extrudePlanRect(xSeatStart, xBackStart, miny, maxy, 0.45, 0, mat));  // seat cushion
-  group.add(extrudePlanRect(xBackStart, maxx,       miny, maxy, 0.95, 0, mat));  // backrest
-
-  // Armrests: thin strips on both Y edges along the seat region.
-  const armW = 0.10;
-  const matArm = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
-  group.add(extrudePlanRect(xSeatStart, xBackStart, miny,        miny + armW, 0.65, 0, matArm));
-  group.add(extrudePlanRect(xSeatStart, xBackStart, maxy - armW, maxy,        0.65, 0, matArm));
-
-  group.userData = obj;
+  if (group) {
+    group.position.set(cx, 0, cy);
+    group.userData = obj;
+  }
   return group;
-}
-
-function buildFurniture(obj) {
-  const t = (obj.type || '').toLowerCase();
-  if (t === 'sofa') return buildSofaRecliner(obj);
-
-  // Generic furniture: extrude the polygon footprint vertically by `height`.
-  const fp = obj.footprint;
-  if (!fp || fp.length < 3) return null;
-  const h = obj.height || 0.5;
-  const yBase = obj.yBase || 0;
-
-  // THREE.Shape expects CCW winding for the outer boundary so normals point outward.
-  let verts = fp;
-  if (signedArea(verts) < 0) verts = [...verts].reverse();
-
-  const shape = new THREE.Shape(verts.map(p => new THREE.Vector2(p[0], p[1])));
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
-  // Local (x, y_plan, z_extr) → world (x, z_extr, -y_plan). Extrusion now goes UP in world Y,
-  // plan Y → world -Z (matching floor and walls). x_plan → world x.
-  geo.rotateX(-Math.PI / 2);
-  if (yBase > 0) geo.translate(0, yBase, 0);
-
-  const color = palette[t] !== undefined ? palette[t] : palette.default;
-  const mat = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.userData = obj;
-  return mesh;
 }
 
 function buildRoom(room) {
@@ -1312,9 +1634,18 @@ function buildRoom(room) {
     if (wall) group.add(wall);
   }
 
+  // Overhead warm point light
+  const bxs = room.boundary.map(p => p[0]), bys = room.boundary.map(p => p[1]);
+  const rcx = (Math.min(...bxs) + Math.max(...bxs)) / 2;
+  const rcy = (Math.min(...bys) + Math.max(...bys)) / 2;
+  const rbw = Math.max(...bxs) - Math.min(...bxs);
+  const ptLight = new THREE.PointLight(0xfff0d8, 0.6, rbw * 2.5);
+  ptLight.position.set(rcx, 2.5, rcy);
+  group.add(ptLight);
+
   // Furniture
   for (const obj of (room.objects || [])) {
-    const m = buildFurniture(obj);
+    const m = buildFurniture(obj, room.boundary);
     if (m) group.add(m);
   }
 
@@ -1347,7 +1678,7 @@ function fitPerspectiveToBox(cam, ctl, box) {
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
   const dist = maxDim * 1.6;
-  cam.position.set(center.x + dist * 0.7, center.y + dist * 0.8, center.z + dist);
+  cam.position.set(center.x + dist * 0.6, center.y + dist * 0.85, center.z + dist * 1.1);
   ctl.target.copy(center);
   ctl.update();
 }
@@ -1723,8 +2054,8 @@ function buildRoomEdgesWorld(room) {
       const a = room.boundary[i];
       const b = room.boundary[(i + 1) % N];
       edges.push(new THREE.Vector4(
-        a[0] + offset.x, -a[1] + offset.z,
-        b[0] + offset.x, -b[1] + offset.z,
+        a[0] + offset.x, a[1] + offset.z,
+        b[0] + offset.x, b[1] + offset.z,
       ));
     } else {
       edges.push(new THREE.Vector4(0, 0, 0, 0));
@@ -2202,6 +2533,7 @@ function buildBlindVolumeForRoom(room) {
   const ceiling = room.ceilingHeight || 3.0;
   const geo = new THREE.ExtrudeGeometry(shape, { depth: ceiling, bevelEnabled: false });
   geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
   const conesArr = [];
   for (let i = 0; i < MAX_RADARS * 4; i++) conesArr.push(new THREE.Vector4(0, 0, 0, 0));
   const mat = new THREE.ShaderMaterial({
@@ -2353,6 +2685,7 @@ function buildHeatmapForRoom(room) {
   const shape = new THREE.Shape(room.boundary.map(p => new THREE.Vector2(p[0], p[1])));
   const geo = new THREE.ShapeGeometry(shape);
   geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
   geo.translate(0, 0.005, 0);
   const conesArr = [];
   for (let i = 0; i < MAX_RADARS * 4; i++) conesArr.push(new THREE.Vector4(0, 0, 0, 0));
@@ -2458,8 +2791,8 @@ function computeDevicePlacement(device, room) {
     const fx = fp.facingX !== undefined ? fp.facingX : 0;
     const fy = fp.facingY !== undefined ? fp.facingY : -1;
     return {
-      pos: new THREE.Vector3(fp.x, mech.mountHeight, -fp.y),
-      rotY: Math.atan2(fx, -fy),
+      pos: new THREE.Vector3(fp.x, mech.mountHeight, fp.y),
+      rotY: Math.atan2(fx, fy),
       edgeLength: 1,
     };
   }
@@ -2482,9 +2815,9 @@ function computeDevicePlacement(device, room) {
     pos: new THREE.Vector3(
       px + nxPlan * offset,
       mech.mountHeight,
-      -(py + nyPlan * offset),
+      py + nyPlan * offset,
     ),
-    rotY: Math.atan2(nxPlan, -nyPlan),
+    rotY: Math.atan2(nxPlan, nyPlan),
     edgeLength: L,
   };
 }
@@ -3592,7 +3925,7 @@ function isPointInRadarFov(wp, device) {
   const ceil = room.ceilingHeight || 3.0;
   if (wp.y < 0 || wp.y > ceil) return false;
   const planX = wp.x - offset.x;
-  const planY = offset.z - wp.z;
+  const planY = wp.z - offset.z;
   if (!pointInPolygonPlan([planX, planY], room.boundary)) return false;
   return true;
 }
@@ -3618,7 +3951,7 @@ function updateCoverageIndicators() {
       const wp = {
         x: avatar.x + offX + (lx * cosY + lz * sinY),
         y: lift + ly,
-        z: -avatar.y + offZ + (-lx * sinY + lz * cosY),
+        z: avatar.y + offZ + (-lx * sinY + lz * cosY),
       };
       for (const device of devices) {
         if (isPointInRadarFov(wp, device)) { nInside++; break; }
@@ -3695,7 +4028,7 @@ function updateCoverageReadouts() {
       const wp = {
         x: avatar.x + offX + (lx * cosY + lz * sinY),
         y: lift + ly,
-        z: -avatar.y + offZ + (-lx * sinY + lz * cosY),
+        z: avatar.y + offZ + (-lx * sinY + lz * cosY),
       };
       for (let di = 0; di < devices.length; di++) {
         if (isPointInRadarFov(wp, devices[di])) {
@@ -3883,7 +4216,7 @@ function buildAvatarVisual(avatar) {
     body.add(buildFallAura(avatar.posture, sitStyle));
   }
   group.add(body);
-  group.position.set(avatar.x, 0, -avatar.y);
+  group.position.set(avatar.x, 0, avatar.y);
   group.rotation.y = (avatar.yawDeg || 0) * Math.PI / 180;
   group.userData.avatarId = avatar.id;
   // Shadows (#117): every limb casts onto the floor; receive is off so a
@@ -3935,7 +4268,7 @@ function rebuildAvatarLayer() {
 function updateAvatarTransform(avatar) {
   const visual = AVATAR_LAYER.children.find(c => c.userData.avatarId === avatar.id);
   if (!visual) return;
-  visual.position.set(avatar.x, 0, -avatar.y);
+  visual.position.set(avatar.x, 0, avatar.y);
   visual.rotation.y = (avatar.yawDeg || 0) * Math.PI / 180;
   // If the sit style flipped (avatar dragged between chair-class and bed-class
   // surfaces), rebuild the body — limb layout is different between bent vs spread.
@@ -4206,8 +4539,8 @@ function rebuildDragWallState(device, room) {
   const a = room.boundary[ei];
   const b = room.boundary[(ei + 1) % N];
   const offset = ROOM_LAYER.position;
-  const aWorld = new THREE.Vector3(a[0] + offset.x, 0, -a[1] + offset.z);
-  const bWorld = new THREE.Vector3(b[0] + offset.x, 0, -b[1] + offset.z);
+  const aWorld = new THREE.Vector3(a[0] + offset.x, 0, a[1] + offset.z);
+  const bWorld = new THREE.Vector3(b[0] + offset.x, 0, b[1] + offset.z);
   const edge = new THREE.Vector3().subVectors(bWorld, aWorld);
   const L = edge.length();
   if (L < 0.01) return false;
@@ -4279,10 +4612,10 @@ function moveDragAvatar(event) {
   _dragRay.setFromCamera(ndcFromEvent(event), camera);
   const hit = new THREE.Vector3();
   if (!_dragRay.ray.intersectPlane(dragState.floorPlane, hit)) return;
-  // World → JSON plan: x_plan = x_world - offset.x ; y_plan = offset.z - z_world
+  // World → JSON plan: x_plan = x_world - offset.x ; y_plan = z_world - offset.z
   const offset = AVATAR_LAYER.position;
   const planX = hit.x - offset.x;
-  const planY = offset.z - hit.z;
+  const planY = hit.z - offset.z;
   // Two-stage clamp: walls first, then push out of any overlapping furniture
   // AABB, then re-clamp against walls in case the furniture-push moved us
   // back into one. Rotation-aware via posture + yawDeg + sitStyle.
@@ -5234,10 +5567,10 @@ function fovCoversPoint(planX, planY, floorY, device, room) {
   const mech = RADAR_PROFILE.mechanical;
   const rad = RADAR_PROFILE.radiometric;
 
-  // Plan coords → world coords (x = planX, y = floorY, z = -planY)
+  // Plan coords → world coords (x = planX, y = floorY, z = planY)
   let px = planX - placement.pos.x;
   let py = floorY - placement.pos.y;
-  let pz = -planY - placement.pos.z;
+  let pz = planY - placement.pos.z;
 
   // Inverse yaw
   const cosY = Math.cos(placement.rotY), sinY = Math.sin(placement.rotY);
@@ -5478,6 +5811,7 @@ function updateSuggestPanel() {
       return `<div class="suggest-row">
         <span class="suggest-score ${cls}">${pct}%</span>
         <span class="suggest-info">Radar #${i+1} (placed)</span>
+        <button class="suggest-add device-send" data-device-idx="${i}">Send to 2D</button>
       </div>`;
     }).join('') + '<div style="border-top:1px solid var(--divider);margin:6px 0;"></div>';
   }
@@ -5487,13 +5821,14 @@ function updateSuggestPanel() {
     const cls = s.score >= 1 ? 'full' : 'partial';
     const isPreviewing = _previewSug && _previewSug.wallEdgeIndex === s.wallEdgeIndex && Math.abs(_previewSug.u - s.u) < 0.001;
     const rowCls = isPreviewing ? 'suggest-row previewing' : 'suggest-row';
-    const btn = isPreviewing
-      ? `<button class="suggest-confirm" data-suggest-idx="${i}">✓ Add Radar</button>`
-      : `<button class="suggest-add" data-suggest-idx="${i}">Preview</button>`;
     return `<div class="${rowCls}">
       <span class="suggest-score ${cls}">${pct}%</span>
       <span class="suggest-info">#${i+1} · Wall ${s.wallEdgeIndex} · ${(s.u * 100).toFixed(0)}% along</span>
-      ${btn}
+      <span style="display:flex;gap:4px;">
+        <button class="suggest-add" data-suggest-idx="${i}" ${isPreviewing ? 'disabled style="opacity:0.4;cursor:default;background:#374151;"' : ''}>Preview</button>
+        <button class="suggest-confirm" data-suggest-idx="${i}" ${!isPreviewing ? 'disabled style="opacity:0.4;cursor:default;background:#374151;"' : ''}>+ Add</button>
+        <button class="suggest-add suggest-send-2d" data-suggest-idx="${i}" ${!isPreviewing ? 'disabled style="opacity:0.4;cursor:default;background:#374151;"' : ''}>→ 2D</button>
+      </span>
     </div>`;
   }).join('');
 
@@ -5504,15 +5839,64 @@ function updateSuggestPanel() {
   <div class="panel-body">${deviceScoreHtml}${rows}</div>`;
 }
 
-// Event delegation for suggest panel Preview / Confirm buttons
+// Send a device/suggestion position to the 2D configurator
+function sendPositionTo2D(dev, room, label) {
+  if (!window.opener || !room) return;
+  let planX, planY;
+  if (dev.freePosition) {
+    planX = dev.freePosition.x;
+    planY = dev.freePosition.y;
+  } else {
+    const boundary = room.boundary;
+    const N = boundary.length;
+    const ei = dev.wallEdgeIndex % N;
+    const a = boundary[ei], b = boundary[(ei + 1) % N];
+    planX = a[0] + dev.u * (b[0] - a[0]);
+    planY = a[1] + dev.u * (b[1] - a[1]);
+  }
+  window.opener.postMessage({
+    type: 'msim-place-radar',
+    position: { x: planX, y: planY },
+    wallEdgeIndex: dev.wallEdgeIndex,
+    u: dev.u,
+    index: dev._index || 0,
+  }, '*');
+  showToast(`${label} sent to 2D configurator`, 'success');
+}
+
+// Event delegation for suggest panel
 document.getElementById('suggest-list').addEventListener('click', (e) => {
+  const room = currentRoomData && currentRoomData.rooms[0];
+
+  // "→ 2D" on a suggestion row (send preview to configurator without adding to mSIM)
+  const send2dBtn = e.target.closest('.suggest-send-2d');
+  if (send2dBtn && room && _previewSug) {
+    const idx = parseInt(send2dBtn.dataset.suggestIdx, 10);
+    sendPositionTo2D({ wallEdgeIndex: _previewSug.wallEdgeIndex, u: _previewSug.u, _index: idx + 1 }, room, `Suggestion #${idx + 1}`);
+    return;
+  }
+
+  // "+ Add" on a suggestion row (confirm preview + send to 2D)
   const confirmBtn = e.target.closest('.suggest-confirm');
-  if (confirmBtn) {
+  if (confirmBtn && !confirmBtn.disabled) {
     confirmPreview();
     return;
   }
+
+  // "Send to 2D" for placed devices
+  const sendBtn = e.target.closest('.device-send');
+  if (sendBtn && room) {
+    const di = parseInt(sendBtn.dataset.deviceIdx, 10);
+    const realDevices = devices.filter(d => d !== _previewDevice);
+    const dev = realDevices[di];
+    if (!dev) return;
+    sendPositionTo2D({ ...dev, _index: di + 1 }, room, `Radar #${di + 1}`);
+    return;
+  }
+
+  // "Preview" button
   const btn = e.target.closest('.suggest-add');
-  if (!btn) return;
+  if (!btn || btn.disabled || btn.classList.contains('suggest-send-2d')) return;
   const idx = parseInt(btn.dataset.suggestIdx, 10);
   const sug = _lastSuggestions[idx];
   if (!sug) return;

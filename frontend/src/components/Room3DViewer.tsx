@@ -7,6 +7,7 @@ interface Props {
   room: RoomConfig;
   objects: RoomObject[];
   onClose: () => void;
+  embed?: boolean;
 }
 
 function hexToInt(hex: string): number {
@@ -349,7 +350,7 @@ function isTV(obj: RoomObject): boolean {
 }
 
 // ── MAIN COMPONENT ────────────────────────────────────────────────────────────
-export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
+export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose, embed }) => {
   const mountRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -713,6 +714,10 @@ export const Room3DViewer: React.FC<Props> = ({ room, objects, onClose }) => {
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
   }, [objects, room]);
+
+  if (embed) {
+    return <div ref={mountRef} style={{ width: '100%', height: '100%', background: '#0d1117' }} />;
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(6px)' }}>

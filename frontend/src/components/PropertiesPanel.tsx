@@ -88,8 +88,10 @@ export const PropertiesPanel: React.FC<Props> = ({
     const { nx: fwd_x, ny: fwd_y } = radar ? getRadarFacing(radar, room) : { nx: 0, ny: -1 };
     const right_x = -fwd_y, right_y = fwd_x;
 
-    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door');
+    const exportable = objects.filter(o => o.type === 'bed' || o.type === 'door' || o.type === 'sofa');
+    const sofaCount = exportable.filter(o => o.type === 'sofa').length;
     let doorIdx = 0;
+    let sofaIdx = 0;
     const configObjs = exportable.map(obj => {
       const corners = [
         [obj.x,             obj.y],
@@ -105,7 +107,10 @@ export const PropertiesPanel: React.FC<Props> = ({
       const minX = Math.min(...xs), maxX = Math.max(...xs);
       const minY = Math.min(...ys), maxY = Math.max(...ys);
 
-      const name = obj.type === 'door' ? `door${++doorIdx}` : 'bed';
+      let name: string;
+      if (obj.type === 'door')      name = `door${++doorIdx}`;
+      else if (obj.type === 'sofa') name = sofaCount > 1 ? `sofabed${++sofaIdx}` : 'sofabed';
+      else                          name = 'bed';
       const entry: Record<string, unknown> = {
         name,
         top_left:     [minX, maxY],
@@ -117,7 +122,7 @@ export const PropertiesPanel: React.FC<Props> = ({
         margin_left:   obj.marginLeft   ?? 0,
         margin_right:  obj.marginRight  ?? 0,
       };
-      if (obj.type === 'bed') {
+      if (obj.type === 'bed' || obj.type === 'sofa') {
         entry.top_height    = 0.5;
         entry.bottom_height = 0.5;
         entry.right_width   = 0.5;
@@ -127,7 +132,7 @@ export const PropertiesPanel: React.FC<Props> = ({
     });
 
     const names     = configObjs.map(o => o.name as string);
-    const bedNames  = names.filter(n => n === 'bed');
+    const bedNames  = names.filter(n => n === 'bed' || (n as string).startsWith('sofabed'));
     const doorNames = names.filter(n => (n as string).startsWith('door'));
     const previewObj = {
       device_configs: { board: '<board>', location: room.name },

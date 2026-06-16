@@ -6,6 +6,7 @@ function o(
   label: string,
   x: number, y: number, w: number, h: number,
   rotation = 0,
+  margin = 0,
 ): RoomObject {
   const COLORS: Record<string, string> = {
     bed: '#4299e1', door: '#fbd38d', window: '#90cdf4',
@@ -16,7 +17,7 @@ function o(
   return {
     id, type, label, x, y, width: w, height: h,
     color: COLORS[type] ?? '#718096', rotation,
-    marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
+    marginTop: margin, marginBottom: margin, marginLeft: margin, marginRight: margin,
   };
 }
 
@@ -106,6 +107,22 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoom[] = [
       o('fb_tv',   'custom',  'Television',     1.602, 3.508, 0.888, 0.117),
       o('fb_d1',   'door',    'Door area',      3.726, 2.163, 0.250, 1.401),
       o('fb_w1',   'window',  'Window area',    0.000, 0.898, 0.250, 1.621),
+    ],
+  },
+  {
+    // Manually measured layout (radar at 0,0; offsets are radar→centroid).
+    // Radar sits in the bottom-left corner facing the bed; on export the
+    // radar-relative coords reproduce the measured numbers exactly:
+    //   bed  centroid (0.61, 2.36), 1.00 (breadth) × 2.05 (length)
+    //   door centroid (1.80, 1.15), 0.92 opening (vertical, right wall) × 0.25 thick
+    id: 'manual_radar',
+    label: 'Manual (radar)',
+    area: '6.73 m²',
+    config: { name: 'Manual Measure', width: 1.965, height: 3.425 },
+    objects: [
+      o('mr_radar', 'radar', 'Radar',  0.000, 3.345, 0.080, 0.080),
+      o('mr_bed',   'bed',   'Bed',    0.150, 0.000, 1.000, 2.050, 0, 0.5),
+      o('mr_door',  'door',  'Door',   1.715, 1.775, 0.250, 0.920, 0, 0.5),
     ],
   },
 ];

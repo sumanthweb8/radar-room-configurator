@@ -325,6 +325,120 @@ async def import_dxf(file: UploadFile = File(...)):
     }
 
 
+# ─── liveroom bridge ────────────────────────────────────────────────────────
+# Stores room configs pushed from the configurator frontend and serves them
+# in the format KuboCare's LiveRoom1 component expects.
+
+_liveroom_store: dict = {}
+
+WEB_VIEW = 550
+
+
+def _to_liveroom(room_cfg: dict) -> dict:
+    """Convert a configurator room config into LiveRoom1-compatible format."""
+    room = room_cfg["room"]
+    objects = room_cfg.get("objects", [])
+    room_w = room["width"]
+    room_h = room["height"]
+
+    longer = max(room_w, room_h)
+    scale = WEB_VIEW / longer
+    web_w = room_w * scale
+    web_h = room_h * scale
+
+    radar = next((o for o in objects if o["type"] == "radar"), None)
+    radar_x_px = (radar["x"] + radar["width"] / 2) * scale if radar else web_w / 2
+    radar_y_px = (radar["y"] + radar["height"] / 2) * scale if radar else web_h
+
+    furniture = []
+    for obj in objects:
+        if obj["type"] == "radar":
+            continue
+        furniture.append({
+            "startX": round(obj["x"] * scale, 1),
+            "startZ": round(obj["y"] * scale, 1),
+            "endX":   round((obj["x"] + obj["width"]) * scale, 1),
+            "endZ":   round((obj["y"] + obj["height"]) * scale, 1),
+            "image":  "",
+            "rotation": obj.get("rotation", 0),
+            "object_id": obj["type"],
+        })
+
+    return {
+        "dimensions": {
+            "width": round(web_w, 1),
+            "length": round(web_h, 1),
+            "radar_x": round(radar_x_px, 1),
+            "radar_y": round(radar_y_px, 1),
+        },
+        "furniture": furniture,
+        "room": {
+            "id": room_cfg.get("id", "room_1"),
+            "board_id": "DEV_BOARD",
+            "room_name": room.get("name", "Imported Room"),
+            "room_id": room_cfg.get("id", "room_1"),
+            "location": "dev",
+            "room_pos": "D",
+        },
+    }
+
+
+@app.post("/api/liveroom/store")
+async def liveroom_store(payload: dict):
+    """Store a room config from the configurator frontend."""
+    room_id = payload.get("id", "room_1")
+    _liveroom_store[room_id] = payload
+    return {"status": "ok", "id": room_id}
+
+
+@app.get("/api/liveroom/rooms/{resident_id}")
+async def liveroom_rooms(resident_id: str):
+    """Mimic getRoomsListByResident for dev mode."""
+    rooms = []
+    for rid, cfg in _liveroom_store.items():
+        lr = _to_liveroom(cfg)
+        rooms.append(lr["room"])
+    if not rooms:
+        rooms = [{"room_name": "No room configured", "board_id": "", "room_id": "none", "location": "", "room_pos": "D"}]
+    return {"rooms": rooms, "temperature_unit": "F"}
+
+
+@app.post("/api/liveroom/room-by-resident")
+async def liveroom_room_by_resident(body: dict):
+    """Mimic getRoomByResident for dev mode."""
+    room_id = body.get("room_id", "")
+    cfg = _liveroom_store.get(room_id)
+    if not cfg:
+        cfg = next(iter(_liveroom_store.values()), None)
+    if not cfg:
+        return {"id": "none", "board_id": "", "location": "", "room_pos": "D"}
+    return _to_liveroom(cfg)["room"]
+
+
+@app.post("/api/liveroom/dimensions")
+async def liveroom_dimensions(body: dict):
+    """Mimic getRoomDimensionsDynamic for dev mode."""
+    room_id = body.get("roomId", "")
+    cfg = _liveroom_store.get(room_id)
+    if not cfg:
+        cfg = next(iter(_liveroom_store.values()), None)
+    if not cfg:
+        return {"width": WEB_VIEW, "length": WEB_VIEW, "radar_x": WEB_VIEW / 2}
+    return _to_liveroom(cfg)["dimensions"]
+
+
+@app.post("/api/liveroom/furniture")
+async def liveroom_furniture(body: dict):
+    """Mimic furniture endpoint for dev mode."""
+    room_id = body.get("roomId", "")
+    cfg = _liveroom_store.get(room_id)
+    if not cfg:
+        cfg = next(iter(_liveroom_store.values()), None)
+    if not cfg:
+        return {"furniture": []}
+    return {"furniture": _to_liveroom(cfg)["furniture"]}
+
+
 # ─── refine ──────────────────────────────────────────────────────────────────
 
 @app.post("/api/refine", response_model=FloorPlan)
@@ -342,6 +456,149 @@ async def refine(floor_plan: FloorPlan):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Refine error: {exc}")
     return floor_plan
+
+
+# ─── movement (Databricks) ───────────────────────────────────────────────────
+#
+# Pulls the latest N 2-second movement buckets for a board straight from the
+# kubocare_external_prod.bronze.obj table, shaped for the MovementViewer
+# (columns: bucket_missouri, obj_values). Replaces the manual CSV-export step.
+#
+# Requires these env vars in backend/.env (see .env.example):
+#   DATABRICKS_SERVER_HOSTNAME   e.g. dbc-xxxxxxxx.cloud.databricks.com
+#   DATABRICKS_HTTP_PATH         e.g. /sql/1.0/warehouses/a3f419415962f83b
+#   DATABRICKS_TOKEN             a personal access token
+
+_TZ_DEFAULT = "America/Chicago"   # Central — "missouri" buckets are in this zone
+
+
+def _build_movement_query(*, has_date: bool, has_start: bool,
+                          has_end: bool, window_mode: bool, limit: int) -> str:
+    """Build the movement-bucket SQL, mirroring the proven analyst query:
+    2-second buckets, obj timestamps converted UTC→Central, empty {} frames
+    dropped, deduped via collect_set. Optional partition/time filters are added
+    only when supplied so unused params never need binding."""
+    where = ["board = :board"]
+    if has_date:
+        where.append("event_date = DATE(:event_date)")
+    if has_start:
+        where.append("event_time_ts >= to_utc_timestamp(:start_ts, :tz)")
+    if has_end:
+        where.append("event_time_ts < to_utc_timestamp(:end_ts, :tz)")
+    where_sql = "\n    AND ".join(where)
+
+    inner = f"""
+  SELECT
+    from_utc_timestamp(
+      from_unixtime(floor(unix_timestamp(event_time_ts) / 2) * 2),
+      :tz
+    )                                               AS bucket_missouri,
+    collect_set(CASE WHEN obj != '{{}}' THEN obj END) AS obj_values
+  FROM kubocare_external_prod.bronze.obj
+  WHERE {where_sql}
+  GROUP BY floor(unix_timestamp(event_time_ts) / 2)"""
+
+    if window_mode:
+        # Explicit window → return the whole thing chronologically (high safety cap).
+        return f"SELECT bucket_missouri, obj_values FROM ({inner}\n  ORDER BY bucket_missouri ASC\n) LIMIT {limit}"
+    # No window → newest N buckets, handed back chronologically for playback.
+    return (f"SELECT bucket_missouri, obj_values FROM ({inner}\n"
+            f"  ORDER BY bucket_missouri DESC\n  LIMIT {limit}\n"
+            f") ORDER BY bucket_missouri ASC")
+
+
+def _normalize_frames(cell) -> list:
+    """Turn the to_json(collect_list(obj)) cell into a list of frame JSON strings
+    shaped {track_id: {center:[lat,fwd], ...}} as the viewer expects.
+
+    Handles both possible encodings of the raw obj map: nested objects, and the
+    double-stringified map<string,string> form (inner value is itself JSON)."""
+    try:
+        frames = json.loads(cell) if isinstance(cell, str) else cell
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for fr in frames or []:
+        try:
+            m = json.loads(fr) if isinstance(fr, str) else fr
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(m, dict):
+            continue
+        norm = {}
+        for tid, inner in m.items():
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except (TypeError, ValueError):
+                    continue
+            if isinstance(inner, dict) and isinstance(inner.get("center"), list):
+                norm[tid] = inner
+        if norm:
+            out.append(json.dumps(norm, separators=(",", ":")))
+    return out
+
+
+@app.get("/api/movement/latest")
+def movement_latest(
+    board: str = "kc2508p020",
+    n: int = 500,
+    date: Optional[str] = None,    # event_date partition, 'YYYY-MM-DD' (Central calendar day)
+    start: Optional[str] = None,   # window start 'YYYY-MM-DD HH:MM:SS' (Central)
+    end: Optional[str] = None,     # window end   'YYYY-MM-DD HH:MM:SS' (Central)
+    tz: str = _TZ_DEFAULT,
+):
+    """Movement buckets for `board`, ready for the MovementViewer.
+
+    Provide date + start/end for a specific window (how analysts investigate an
+    incident); omit them to get the latest N buckets."""
+    host = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+    http_path = os.getenv("DATABRICKS_HTTP_PATH")
+    token = os.getenv("DATABRICKS_TOKEN")
+    if not (host and http_path and token):
+        raise HTTPException(
+            status_code=503,
+            detail="Databricks is not configured. Set DATABRICKS_SERVER_HOSTNAME, "
+                   "DATABRICKS_HTTP_PATH and DATABRICKS_TOKEN in backend/.env.",
+        )
+    try:
+        from databricks import sql as dbsql
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="databricks-sql-connector is not installed. "
+                   "Run: pip install databricks-sql-connector",
+        )
+
+    has_date, has_start, has_end = bool(date), bool(start), bool(end)
+    window_mode = has_start or has_end
+    # Window queries return the whole span (capped high); latest-N is bounded by n.
+    limit = 20000 if window_mode else max(1, min(int(n), 5000))
+    query = _build_movement_query(has_date=has_date, has_start=has_start,
+                                  has_end=has_end, window_mode=window_mode, limit=limit)
+
+    params = {"board": board, "tz": tz}
+    if has_date:  params["event_date"] = date
+    if has_start: params["start_ts"] = start
+    if has_end:   params["end_ts"] = end
+
+    try:
+        with dbsql.connect(server_hostname=host, http_path=http_path,
+                           access_token=token) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)   # board/date/window bound as parameters
+                fetched = cur.fetchall()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Databricks query failed: {exc}")
+
+    rows = []
+    for row in fetched:
+        ts = row.bucket_missouri
+        ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+        rows.append({"bucket_missouri": ts_str, "obj_values": _normalize_frames(row.obj_values)})
+    return {"board": board, "count": len(rows), "window": window_mode, "rows": rows}
 
 
 # ─── entry point ─────────────────────────────────────────────────────────────
